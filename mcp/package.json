@@ -1,0 +1,9 @@
+{
+  "name": "ia-bridge-mcp-runtime",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0"
+  }
+}

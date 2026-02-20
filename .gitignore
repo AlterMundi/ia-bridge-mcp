@@ -1,0 +1,8 @@
+# Runtime/dependency artifacts
+mcp/node_modules/
+mcp/.venv/
+mcp/__pycache__/
+
+# Python bytecode
+**/__pycache__/
+*.pyc

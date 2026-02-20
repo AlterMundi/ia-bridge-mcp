@@ -1,0 +1,8 @@
+{
+  "name": "peer-opinion",
+  "description": "User-level Claude and Codex collaboration plugin backed by a shared MCP bridge",
+  "version": "1.1.0",
+  "author": {
+    "name": "fede"
+  }
+}
