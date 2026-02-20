@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
-ROOT="$(cd "$(dirname "${SCRIPT_PATH}")/../../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd -P)"
 SERVER_SCRIPT="${ROOT}/mcp/ia_bridge_mcp_server.mjs"
 CLIENT_SCRIPT="${ROOT}/mcp/mcp_tool_call.py"
 MCP_NODE_MODULE="${ROOT}/mcp/node_modules/@modelcontextprotocol/sdk/package.json"

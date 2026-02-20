@@ -38,6 +38,11 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 not found in PATH." >&2
+  exit 1
+fi
+
 if [[ ! -f "${MARKETPLACE_DIR}/.claude-plugin/marketplace.json" ]]; then
   echo "Error: marketplace.json not found at ${MARKETPLACE_DIR}" >&2
   exit 1
@@ -47,6 +52,22 @@ if [[ ! -f "${MCP_PACKAGE_JSON}" ]]; then
   echo "Error: MCP package.json not found at ${MCP_PACKAGE_JSON}" >&2
   exit 1
 fi
+
+has_marketplace() {
+  if command -v rg >/dev/null 2>&1; then
+    claude plugin marketplace list 2>/dev/null | rg -q "${MARKETPLACE_NAME}"
+  else
+    claude plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}"
+  fi
+}
+
+has_plugin() {
+  if command -v rg >/dev/null 2>&1; then
+    claude plugin list 2>/dev/null | rg -q "${PLUGIN_NAME}"
+  else
+    claude plugin list 2>/dev/null | grep -q "${PLUGIN_NAME}"
+  fi
+}
 
 chmod +x "${MCP_SERVER_SCRIPT}" "${MCP_CLIENT_SCRIPT}" "${SECOND_OPINION_WRAPPER}" "${IA_BRIDGE_WRAPPER}" \
   "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/claude-second-opinion.sh" \
@@ -69,14 +90,14 @@ if [[ ! -f "${MCP_NODE_MODULE}" ]]; then
 fi
 
 echo "[2/9] Registering local marketplace..."
-if claude plugin marketplace list 2>/dev/null | rg -q "${MARKETPLACE_NAME}"; then
+if has_marketplace; then
   claude plugin marketplace update "${MARKETPLACE_NAME}" >/dev/null
 else
   claude plugin marketplace add "${MARKETPLACE_DIR}" >/dev/null
 fi
 
 echo "[3/9] Installing user plugin ${PLUGIN_NAME}..."
-if claude plugin list 2>/dev/null | rg -q "${PLUGIN_NAME}"; then
+if has_plugin; then
   :
 else
   claude plugin install "${PLUGIN_NAME}" --scope user >/dev/null
