@@ -19,3 +19,4 @@ Call MCP tool `single_opinion_run` with:
 Then show:
 1. Log file path
 2. Top 3 findings
+3. Confidence + key unknowns

@@ -15,3 +15,4 @@ Then summarize:
 1. Session directory
 2. Final synthesis file
 3. Three key decisions
+4. Remaining unresolved risks

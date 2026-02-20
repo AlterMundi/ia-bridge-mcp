@@ -211,15 +211,22 @@ $REQUEST_HEADER
 2) Exact edits (file paths)
 3) Test/verify commands
 4) Risks/edge cases and likely regressions
+5) One alternative approach that is higher upside but higher risk
 
 [DIFF PREVIEW]
 $DIFF_CONTENT
 
+[PROCESS RULES]
+- Use only provided context.
+- Do not invent files, commits, or commands that are not grounded in context.
+- If evidence is missing, state an explicit assumption.
+
 [OUTPUT FORMAT]
-- Plan (max 6 bullets)
 - Findings first (ordered by severity)
+- Plan (max 6 bullets)
 - Patch-ready edits
 - Verification commands
+- Confidence + unknowns
 - Short rationale"
 
 {

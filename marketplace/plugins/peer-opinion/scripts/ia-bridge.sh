@@ -260,12 +260,14 @@ if [[ ! -f "$ROUND1_PROMPT_FILE" ]]; then
     printf '[RECENT COMMITS]\n%s\n\n' "$RECENT_COMMITS"
     printf '[DIFF PREVIEW]\n%s\n\n' "$DIFF_CONTENT"
     printf '[REQUEST]\nPropose your best solution independently.\n\n'
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context.\n- Keep response concise and actionable.\n\n'
+    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context.\n- Do not invent files, commits, or command outputs.\n- If evidence is missing, state explicit assumptions.\n- Keep response concise and actionable.\n\n'
     printf '[OUTPUT FORMAT]\n'
-    printf -- '- Plan (max 6 bullets)\n'
     printf -- '- Findings first (ordered by severity)\n'
+    printf -- '- Plan (max 6 bullets)\n'
     printf -- '- Patch-ready edits (file paths explicit)\n'
     printf -- '- Verification commands\n'
+    printf -- '- One high-upside alternative approach (+ tradeoff)\n'
+    printf -- '- Confidence + unknowns\n'
     printf -- '- Short rationale\n'
   } > "$ROUND1_PROMPT_FILE"
 fi
@@ -291,7 +293,7 @@ fi
 if [[ ! -f "$CLAUDE_CRITIQUE_PROMPT" ]]; then
   {
     printf "[TASK]\nCritique Codex's proposal against your own proposal for the same task.\n\n"
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n\n'
+    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Call out unsupported claims explicitly.\n\n'
     printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
     printf '[YOUR PROPOSAL - CLAUDE]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
     printf '[OTHER PROPOSAL - CODEX]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
@@ -307,7 +309,7 @@ fi
 if [[ ! -f "$CODEX_CRITIQUE_PROMPT" ]]; then
   {
     printf "[TASK]\nCritique Claude's proposal against your own proposal for the same task.\n\n"
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n\n'
+    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Call out unsupported claims explicitly.\n\n'
     printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
     printf '[YOUR PROPOSAL - CODEX]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
     printf '[OTHER PROPOSAL - CLAUDE]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
@@ -341,7 +343,7 @@ fi
 if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
   {
     printf '[ROLE]\nYou are synthesizing a collaborative decision between Claude and Codex.\n\n'
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n\n'
+    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Prefer recommendations backed by explicit evidence from the prior rounds.\n\n'
     printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
     printf '[CLAUDE ROUND 1]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
     printf '[CODEX ROUND 1]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
@@ -354,6 +356,7 @@ if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
     printf -- '- Open disagreements not resolved\n'
     printf -- '- Verification checklist\n'
     printf -- '- Rollback plan\n'
+    printf -- '- Confidence + unresolved unknowns\n'
   } > "$SYNTHESIS_PROMPT"
 fi
 
