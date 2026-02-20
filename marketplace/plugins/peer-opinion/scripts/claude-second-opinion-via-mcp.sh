@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd -P)"
 ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd -P)"
 SERVER_SCRIPT="${ROOT}/mcp/ia_bridge_mcp_server.mjs"
 CLIENT_SCRIPT="${ROOT}/mcp/mcp_tool_call.py"
