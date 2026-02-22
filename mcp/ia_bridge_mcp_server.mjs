@@ -7,7 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -297,10 +297,11 @@ class CompatStdioServerTransport {
 
 const server = new Server(
   { name: "ia-bridge-mcp", version: "2.1.0" },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, resources: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
