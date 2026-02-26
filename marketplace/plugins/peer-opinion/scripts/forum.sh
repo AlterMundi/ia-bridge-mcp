@@ -7,8 +7,8 @@ unset CLAUDECODE 2>/dev/null || true
 usage() {
   cat <<'USAGE'
 Usage:
-  ia-bridge.sh --task "<task description>" [options]
-  ia-bridge.sh --resume <session-dir> [--task <additional context>] [options]
+  forum.sh --task "<task description>" [options]
+  forum.sh --resume <session-dir> [--task <additional context>] [options]
 
 Options:
   --task <text>             Required (new session). Shared task statement.

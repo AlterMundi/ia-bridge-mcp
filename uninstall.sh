@@ -18,7 +18,7 @@ if command -v codex >/dev/null 2>&1; then
 fi
 
 rm -f "${HOME}/.local/bin/second-opinion"
-rm -f "${HOME}/.local/bin/ia-bridge"
+rm -f "${HOME}/.local/bin/forum"
 rm -rf "${MCP_NODE_MODULES_DIR}"
 
 echo "Removed plugin, marketplace registration, MCP server registration, global executables, and SDK runtime."

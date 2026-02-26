@@ -10,8 +10,8 @@ ia-bridge-mcp (Node stdio MCP server)
   -> registered in Codex MCP config
   -> exposes: ia_bridge_run, single_opinion_run, ia_bridge_job_status, ia_bridge_job_result, session list/read
 
-CLI wrappers: ia-bridge, second-opinion
-Slash commands: /ia-bridge, /second-opinion
+CLI wrappers: forum, second-opinion
+Slash commands: /forum, /second-opinion
 ```
 
 Codex may display `Auth: Unsupported` for stdio MCPs. That is expected and not a connectivity error.
@@ -21,13 +21,13 @@ Codex may display `Auth: Unsupported` for stdio MCPs. That is expected and not a
 | File | Purpose |
 |---|---|
 | `mcp/ia_bridge_mcp_server.mjs` | MCP server entrypoint |
-| `marketplace/plugins/peer-opinion/scripts/ia-bridge.sh` | 3-round bridge protocol |
+| `marketplace/plugins/peer-opinion/scripts/forum.sh` | 3-round bridge protocol |
 | `marketplace/plugins/peer-opinion/scripts/second-opinion.sh` | single-pass opinion |
 
 ## Install
 
 ```bash
-cd ~/REPOS/Skills/mcps/ia-bridge-mcp
+cd ~/REPOS/Skills/mcps/forum-mcp
 ./install.sh
 ```
 
@@ -36,7 +36,7 @@ cd ~/REPOS/Skills/mcps/ia-bridge-mcp
 ```bash
 second-opinion --task "Review this patch"
 second-opinion --reviewer codex --task "Review this patch"
-ia-bridge --task "Design safer rollout" --constraints "backward-compatible"
+forum --task "Design safer rollout" --constraints "backward-compatible"
 ```
 
 Tool auto-detects repo context: `code` mode in git repos, `non-code` otherwise.
@@ -63,6 +63,6 @@ Typical files:
 ## Uninstall
 
 ```bash
-cd ~/REPOS/Skills/mcps/ia-bridge-mcp
+cd ~/REPOS/Skills/mcps/forum-mcp
 ./uninstall.sh
 ```

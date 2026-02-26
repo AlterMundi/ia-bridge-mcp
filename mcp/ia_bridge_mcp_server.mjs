@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const scriptsDir = path.join(root, "marketplace", "plugins", "peer-opinion", "scripts");
 const secondOpinionScript = path.join(scriptsDir, "second-opinion.sh");
-const iaBridgeScript = path.join(scriptsDir, "ia-bridge.sh");
+const forumScript = path.join(scriptsDir, "forum.sh");
 const bridgeAiDir = path.join(os.homedir(), ".bridge-ai");
 const defaultSessionsDir = path.join(bridgeAiDir, "sessions");
 const defaultOpinionsDir = path.join(bridgeAiDir, "opinions");
@@ -780,7 +780,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
 
     await upsertJob(job);
-    result = await runScriptBackgroundJob(job, iaBridgeScript, scriptArgs, cwd);
+    result = await runScriptBackgroundJob(job, forumScript, scriptArgs, cwd);
   } else if (toolName === "single_opinion_run") {
     const mode = parseMode(args.mode, "async", ["sync", "async"]);
     if (!mode) {

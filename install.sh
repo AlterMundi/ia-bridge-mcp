@@ -13,17 +13,17 @@ MCP_CLIENT_SCRIPT="${MCP_DIR}/mcp_tool_call.py"
 MCP_PACKAGE_JSON="${MCP_DIR}/package.json"
 MCP_NODE_MODULE="${MCP_DIR}/node_modules/@modelcontextprotocol/sdk/package.json"
 SECOND_OPINION_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/second-opinion-via-mcp.sh"
-IA_BRIDGE_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/ia-bridge-via-mcp.sh"
+FORUM_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/forum-via-mcp.sh"
 USER_BIN_DIR="${HOME}/.local/bin"
 SECOND_OPINION_LINK="${USER_BIN_DIR}/second-opinion"
-IA_BRIDGE_LINK="${USER_BIN_DIR}/ia-bridge"
+FORUM_LINK="${USER_BIN_DIR}/forum"
 BRIDGE_AI_DIR="${HOME}/.bridge-ai"
 BRIDGE_OPINIONS_DIR="${BRIDGE_AI_DIR}/opinions"
 BRIDGE_SESSIONS_DIR="${BRIDGE_AI_DIR}/sessions"
 BRIDGE_JOBS_DIR="${BRIDGE_AI_DIR}/jobs"
 LEGACY_OPINIONS_DIR="${HOME}/.claude/opinions"
-LEGACY_SESSIONS_DIR="${HOME}/.claude/ia-bridge/sessions"
-LEGACY_JOBS_DIR="${HOME}/.claude/ia-bridge/jobs"
+LEGACY_SESSIONS_DIR="${HOME}/.claude/forum/sessions"
+LEGACY_JOBS_DIR="${HOME}/.claude/forum/jobs"
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "Error: claude CLI not found in PATH." >&2
@@ -93,9 +93,9 @@ merge_legacy_dir() {
   fi
 }
 
-chmod +x "${MCP_SERVER_SCRIPT}" "${MCP_CLIENT_SCRIPT}" "${SECOND_OPINION_WRAPPER}" "${IA_BRIDGE_WRAPPER}" \
+chmod +x "${MCP_SERVER_SCRIPT}" "${MCP_CLIENT_SCRIPT}" "${SECOND_OPINION_WRAPPER}" "${FORUM_WRAPPER}" \
   "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/second-opinion.sh" \
-  "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/ia-bridge.sh"
+  "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/forum.sh"
 
 echo "[1/9] Bootstrapping MCP SDK runtime..."
 if ! (cd "${MCP_DIR}" && npm install --no-fund --no-audit >/dev/null); then
@@ -139,7 +139,7 @@ codex mcp add "${MCP_NAME}" -- node "${MCP_SERVER_SCRIPT}" >/dev/null
 echo "[6/9] Installing global executables..."
 mkdir -p "${USER_BIN_DIR}"
 ln -sf "${SECOND_OPINION_WRAPPER}" "${SECOND_OPINION_LINK}"
-ln -sf "${IA_BRIDGE_WRAPPER}" "${IA_BRIDGE_LINK}"
+ln -sf "${FORUM_WRAPPER}" "${FORUM_LINK}"
 
 echo "[7/9] Preparing user log directories..."
 mkdir -p "${BRIDGE_OPINIONS_DIR}"
@@ -153,7 +153,7 @@ merge_legacy_dir "${LEGACY_JOBS_DIR}" "${BRIDGE_JOBS_DIR}"
 
 echo "[8/9] Verifying scripts..."
 "${SECOND_OPINION_LINK}" --help >/dev/null
-"${IA_BRIDGE_LINK}" --help >/dev/null
+"${FORUM_LINK}" --help >/dev/null
 
 echo "[9/9] Done"
 cat <<'DONE'
@@ -165,7 +165,7 @@ SDK-backed MCP backend configured in both CLIs:
 
 Global commands (MCP-backed):
   second-opinion --task "<task>" --constraints "<optional>" [--reviewer claude|codex]
-  ia-bridge --task "<task>" --constraints "<optional>"
+  forum --task "<task>" --constraints "<optional>"
 
 Logs:
   ~/.bridge-ai/opinions/
@@ -174,5 +174,5 @@ Logs:
 
 Interactive Claude plugin commands:
   /second-opinion <task>
-  /ia-bridge <task>
+  /forum <task>
 DONE
