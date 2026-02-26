@@ -10,7 +10,7 @@ ia-bridge-mcp (Node stdio MCP server)
   -> registered in Codex MCP config
   -> exposes: ia_bridge_run, single_opinion_run, ia_bridge_job_status, ia_bridge_job_result, session list/read
 
-CLI wrappers: ia-bridge, claude-second-opinion
+CLI wrappers: ia-bridge, second-opinion
 Slash commands: /ia-bridge, /second-opinion
 ```
 
@@ -22,7 +22,7 @@ Codex may display `Auth: Unsupported` for stdio MCPs. That is expected and not a
 |---|---|
 | `mcp/ia_bridge_mcp_server.mjs` | MCP server entrypoint |
 | `marketplace/plugins/peer-opinion/scripts/ia-bridge.sh` | 3-round bridge protocol |
-| `marketplace/plugins/peer-opinion/scripts/claude-second-opinion.sh` | single-pass opinion |
+| `marketplace/plugins/peer-opinion/scripts/second-opinion.sh` | single-pass opinion |
 
 ## Install
 
@@ -34,8 +34,8 @@ cd ~/REPOS/Skills/mcps/ia-bridge-mcp
 ## Use
 
 ```bash
-claude-second-opinion --task "Review this patch"
-claude-second-opinion --reviewer codex --task "Review this patch"
+second-opinion --task "Review this patch"
+second-opinion --reviewer codex --task "Review this patch"
 ia-bridge --task "Design safer rollout" --constraints "backward-compatible"
 ```
 

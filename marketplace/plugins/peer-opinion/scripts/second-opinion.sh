@@ -7,7 +7,7 @@ unset CLAUDECODE 2>/dev/null || true
 usage() {
   cat <<'USAGE'
 Usage:
-  claude-second-opinion.sh --task "<task description>" [options]
+  second-opinion.sh --task "<task description>" [options]
 
 Options:
   --task <text>             Required. One-line task statement.

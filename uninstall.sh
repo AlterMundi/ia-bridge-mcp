@@ -17,7 +17,7 @@ if command -v codex >/dev/null 2>&1; then
   codex mcp remove "${MCP_NAME}" >/dev/null 2>&1 || true
 fi
 
-rm -f "${HOME}/.local/bin/claude-second-opinion"
+rm -f "${HOME}/.local/bin/second-opinion"
 rm -f "${HOME}/.local/bin/ia-bridge"
 rm -rf "${MCP_NODE_MODULES_DIR}"
 

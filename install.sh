@@ -12,10 +12,10 @@ MCP_SERVER_SCRIPT="${MCP_DIR}/ia_bridge_mcp_server.mjs"
 MCP_CLIENT_SCRIPT="${MCP_DIR}/mcp_tool_call.py"
 MCP_PACKAGE_JSON="${MCP_DIR}/package.json"
 MCP_NODE_MODULE="${MCP_DIR}/node_modules/@modelcontextprotocol/sdk/package.json"
-SECOND_OPINION_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/claude-second-opinion-via-mcp.sh"
+SECOND_OPINION_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/second-opinion-via-mcp.sh"
 IA_BRIDGE_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/ia-bridge-via-mcp.sh"
 USER_BIN_DIR="${HOME}/.local/bin"
-SECOND_OPINION_LINK="${USER_BIN_DIR}/claude-second-opinion"
+SECOND_OPINION_LINK="${USER_BIN_DIR}/second-opinion"
 IA_BRIDGE_LINK="${USER_BIN_DIR}/ia-bridge"
 BRIDGE_AI_DIR="${HOME}/.bridge-ai"
 BRIDGE_OPINIONS_DIR="${BRIDGE_AI_DIR}/opinions"
@@ -94,7 +94,7 @@ merge_legacy_dir() {
 }
 
 chmod +x "${MCP_SERVER_SCRIPT}" "${MCP_CLIENT_SCRIPT}" "${SECOND_OPINION_WRAPPER}" "${IA_BRIDGE_WRAPPER}" \
-  "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/claude-second-opinion.sh" \
+  "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/second-opinion.sh" \
   "${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/ia-bridge.sh"
 
 echo "[1/9] Bootstrapping MCP SDK runtime..."
@@ -164,7 +164,7 @@ SDK-backed MCP backend configured in both CLIs:
   Codex MCP:  ia-bridge-mcp
 
 Global commands (MCP-backed):
-  claude-second-opinion --task "<task>" --constraints "<optional>" [--reviewer claude|codex]
+  second-opinion --task "<task>" --constraints "<optional>" [--reviewer claude|codex]
   ia-bridge --task "<task>" --constraints "<optional>"
 
 Logs:

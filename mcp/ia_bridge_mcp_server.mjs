@@ -16,7 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const scriptsDir = path.join(root, "marketplace", "plugins", "peer-opinion", "scripts");
-const secondOpinionScript = path.join(scriptsDir, "claude-second-opinion.sh");
+const secondOpinionScript = path.join(scriptsDir, "second-opinion.sh");
 const iaBridgeScript = path.join(scriptsDir, "ia-bridge.sh");
 const bridgeAiDir = path.join(os.homedir(), ".bridge-ai");
 const defaultSessionsDir = path.join(bridgeAiDir, "sessions");
@@ -906,4 +906,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new CompatStdioServerTransport();
 await server.connect(transport);
-setInterval(() => {}, 60_000);
+setInterval(() => { }, 60_000);
