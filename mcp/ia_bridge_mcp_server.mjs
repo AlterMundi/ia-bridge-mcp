@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -17,12 +19,17 @@ const scriptsDir = path.join(root, "marketplace", "plugins", "peer-opinion", "sc
 const secondOpinionScript = path.join(scriptsDir, "claude-second-opinion.sh");
 const iaBridgeScript = path.join(scriptsDir, "ia-bridge.sh");
 const defaultSessionsDir = path.join(os.homedir(), ".claude", "ia-bridge", "sessions");
+const defaultOpinionsDir = path.join(os.homedir(), ".claude", "opinions");
+const defaultJobsDir = path.join(os.homedir(), ".claude", "ia-bridge", "jobs");
 const maxSessionListLimit = 200;
+const maxTextChars = 8000;
+const maxJobExcerptChars = 16000;
+const jobs = new Map();
 
 const tools = [
   {
     name: "ia_bridge_run",
-    description: "Run or resume full Claude↔Codex bridge protocol and persist session artifacts",
+    description: "Run or resume full Claude<->Codex bridge protocol and persist session artifacts",
     inputSchema: {
       type: "object",
       properties: {
@@ -34,7 +41,8 @@ const tools = [
         timeout_seconds: { type: "integer" },
         max_diff_lines: { type: "integer" },
         log_dir: { type: "string" },
-        cwd: { type: "string", description: "Working directory (git auto-detected if available)" }
+        cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
+        mode: { type: "string", enum: ["async"], description: "Execution mode. ia_bridge_run only supports async." }
       },
       required: []
     }
@@ -52,9 +60,33 @@ const tools = [
         timeout_seconds: { type: "integer" },
         max_diff_lines: { type: "integer" },
         log_dir: { type: "string" },
-        cwd: { type: "string", description: "Working directory (git auto-detected if available)" }
+        cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
+        mode: { type: "string", enum: ["sync", "async"], description: "Execution mode (default: async)." }
       },
       required: ["task"]
+    }
+  },
+  {
+    name: "ia_bridge_job_status",
+    description: "Get execution status for a bridge/opinion job",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string" }
+      },
+      required: ["job_id"]
+    }
+  },
+  {
+    name: "ia_bridge_job_result",
+    description: "Get final result details for a bridge/opinion job, including output path/content when available",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string" },
+        include_content: { type: "boolean", description: "Include truncated output file content (default: true)." }
+      },
+      required: ["job_id"]
     }
   },
   {
@@ -96,30 +128,186 @@ function argsToFlags(args) {
   return cmd;
 }
 
-async function runScript(scriptPath, args, cwd) {
-  const cmdArgs = argsToFlags(args);
+function truncateText(text, maxChars = maxTextChars) {
+  if (!text || text.length <= maxChars) return text;
+  const remaining = text.length - maxChars;
+  return `${text.slice(0, maxChars)}\n...[truncated ${remaining} chars]`;
+}
+
+function clipTail(text, maxChars = maxJobExcerptChars) {
+  if (!text) return "";
+  return text.length <= maxChars ? text : text.slice(-maxChars);
+}
+
+function normalizePath(inputPath) {
+  return path.resolve(String(inputPath));
+}
+
+function normalizePossiblyRelativePath(rawPath, baseDir) {
+  if (!rawPath) return null;
+  const cleaned = String(rawPath).trim();
+  if (!cleaned) return null;
+  if (path.isAbsolute(cleaned)) return normalizePath(cleaned);
+  return normalizePath(path.join(baseDir ?? process.cwd(), cleaned));
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function parseLimit(raw, fallback = 20) {
+  if (raw === undefined || raw === null) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) return fallback;
+  return Math.min(value, maxSessionListLimit);
+}
+
+function parseMode(raw, fallback, allowed) {
+  if (raw === undefined || raw === null || raw === "") return fallback;
+  const mode = String(raw);
+  return allowed.includes(mode) ? mode : null;
+}
+
+function makeJobId(prefix) {
+  return `${prefix}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+function jobFilePath(jobId) {
+  return path.join(defaultJobsDir, `${jobId}.json`);
+}
+
+async function fileExists(filePath) {
   try {
-    await fs.access(scriptPath);
+    await fs.access(filePath);
+    return true;
   } catch {
-    return { ok: false, stdout: "", stderr: `Script not found: ${scriptPath}`, exit_code: 127 };
+    return false;
+  }
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeJobFile(job) {
+  await fs.mkdir(defaultJobsDir, { recursive: true });
+  const filePath = jobFilePath(job.job_id);
+  const tmpPath = `${filePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(job, null, 2), "utf8");
+  await fs.rename(tmpPath, filePath);
+}
+
+async function upsertJob(job) {
+  const merged = {
+    ...job,
+    updated_at: nowIso()
+  };
+  jobs.set(merged.job_id, merged);
+  await writeJobFile(merged);
+  return merged;
+}
+
+async function getJob(jobId) {
+  if (jobs.has(jobId)) return jobs.get(jobId);
+  try {
+    const raw = await fs.readFile(jobFilePath(jobId), "utf8");
+    const parsed = JSON.parse(raw);
+    jobs.set(jobId, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function loadPersistedJobs() {
+  try {
+    await fs.mkdir(defaultJobsDir, { recursive: true });
+    const entries = await fs.readdir(defaultJobsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const filePath = path.join(defaultJobsDir, entry.name);
+      try {
+        const raw = await fs.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (parsed?.job_id) jobs.set(parsed.job_id, parsed);
+      } catch {
+        // ignore malformed records
+      }
+    }
+  } catch {
+    // ignore startup load errors
+  }
+}
+
+function parseSingleOpinionOutput(stdout, baseDir) {
+  const outputMatch = stdout.match(/^Second opinion saved to:\s*(.+)$/m);
+  const outputPath = normalizePossiblyRelativePath(outputMatch?.[1], baseDir);
+  return {
+    output_path: outputPath,
+    result_path: outputPath,
+    session_dir: outputPath ? path.dirname(outputPath) : null
+  };
+}
+
+function parseBridgeOutput(stdout, baseDir) {
+  const sessionMatch = stdout.match(/^IA bridge session completed:\s*(.+)$/m);
+  const openMatch = stdout.match(/^Open:\s*(.+)$/m);
+
+  const sessionDir = normalizePossiblyRelativePath(sessionMatch?.[1], baseDir);
+  const synthesisPath = normalizePossiblyRelativePath(openMatch?.[1], baseDir);
+
+  return {
+    session_dir: sessionDir,
+    result_path: synthesisPath,
+    output_path: synthesisPath
+  };
+}
+
+async function validateScriptAndCwd(scriptPath, cwd) {
+  try {
+    await fs.access(scriptPath, fsSync.constants.X_OK);
+  } catch {
+    return { ok: false, stderr: `Script not found or not executable: ${scriptPath}`, exit_code: 127 };
   }
 
-  // Strip CLAUDECODE env var to allow spawning claude/codex from within a Claude Code session
+  if (!cwd) return { ok: true };
+
+  try {
+    const stat = await fs.stat(cwd);
+    if (!stat.isDirectory()) {
+      return { ok: false, stderr: `cwd is not a directory: ${cwd}`, exit_code: 2 };
+    }
+  } catch {
+    return { ok: false, stderr: `cwd does not exist or is not accessible: ${cwd}`, exit_code: 2 };
+  }
+
+  return { ok: true };
+}
+
+async function runScript(scriptPath, args, cwd) {
+  const cmdArgs = argsToFlags(args);
+  const scriptCheck = await validateScriptAndCwd(scriptPath, cwd);
+  if (!scriptCheck.ok) {
+    return {
+      ok: false,
+      stdout: "",
+      stderr: scriptCheck.stderr,
+      exit_code: scriptCheck.exit_code,
+      command: [scriptPath, ...cmdArgs].join(" ")
+    };
+  }
+
   const cleanEnv = { ...process.env };
   delete cleanEnv.CLAUDECODE;
 
-  const execOpts = { encoding: "utf8", env: cleanEnv };
-  if (cwd) {
-    try {
-      const stat = await fs.stat(cwd);
-      if (!stat.isDirectory()) {
-        return { ok: false, stdout: "", stderr: `cwd is not a directory: ${cwd}`, exit_code: 2 };
-      }
-      execOpts.cwd = cwd;
-    } catch {
-      return { ok: false, stdout: "", stderr: `cwd does not exist or is not accessible: ${cwd}`, exit_code: 2 };
-    }
-  }
+  const execOpts = { encoding: "utf8", env: cleanEnv, maxBuffer: 10 * 1024 * 1024 };
+  if (cwd) execOpts.cwd = cwd;
 
   try {
     const { stdout, stderr } = await execFileAsync(scriptPath, cmdArgs, execOpts);
@@ -141,22 +329,274 @@ async function runScript(scriptPath, args, cwd) {
   }
 }
 
-function truncateText(text) {
-  const maxChars = 8000;
-  if (!text || text.length <= maxChars) return text;
-  const remaining = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n...[truncated ${remaining} chars]`;
+async function runScriptSyncJob(job, scriptPath, args, cwd) {
+  const running = await upsertJob({
+    ...job,
+    status: "running",
+    started_at: nowIso()
+  });
+
+  const execResult = await runScript(scriptPath, args, cwd);
+
+  const finished = {
+    ...running,
+    status: execResult.ok ? "succeeded" : "failed",
+    finished_at: nowIso(),
+    exit_code: execResult.exit_code,
+    command: execResult.command,
+    stdout_excerpt: execResult.stdout ?? "",
+    stderr_excerpt: execResult.stderr ?? ""
+  };
+
+  if (execResult.ok) {
+    const parsed = job.tool_name === "single_opinion_run"
+      ? parseSingleOpinionOutput(execResult.stdout ?? "", cwd ?? process.cwd())
+      : parseBridgeOutput(execResult.stdout ?? "", cwd ?? process.cwd());
+
+    finished.output_path = parsed.output_path;
+    finished.result_path = parsed.result_path;
+    finished.session_dir = parsed.session_dir;
+  }
+
+  const saved = await upsertJob(finished);
+
+  return {
+    ...execResult,
+    job_id: saved.job_id,
+    mode: saved.mode,
+    status: saved.status,
+    output_path: saved.output_path ?? null,
+    result_path: saved.result_path ?? null,
+    session_dir: saved.session_dir ?? null,
+    message: saved.status === "succeeded"
+      ? "Completed synchronously."
+      : "Synchronous execution failed."
+  };
 }
 
-function normalizePath(inputPath) {
-  return path.resolve(String(inputPath));
+async function runScriptBackgroundJob(job, scriptPath, args, cwd) {
+  const cmdArgs = argsToFlags(args);
+  const scriptCheck = await validateScriptAndCwd(scriptPath, cwd);
+  if (!scriptCheck.ok) {
+    const failed = await upsertJob({
+      ...job,
+      status: "failed",
+      started_at: nowIso(),
+      finished_at: nowIso(),
+      exit_code: scriptCheck.exit_code,
+      stderr_excerpt: scriptCheck.stderr,
+      error: scriptCheck.stderr,
+      command: [scriptPath, ...cmdArgs].join(" ")
+    });
+
+    return {
+      ok: false,
+      job_id: failed.job_id,
+      mode: failed.mode,
+      status: failed.status,
+      stderr: scriptCheck.stderr,
+      exit_code: scriptCheck.exit_code
+    };
+  }
+
+  await fs.mkdir(defaultJobsDir, { recursive: true });
+
+  const stdoutLog = path.join(defaultJobsDir, `${job.job_id}.stdout.log`);
+  const stderrLog = path.join(defaultJobsDir, `${job.job_id}.stderr.log`);
+
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.CLAUDECODE;
+
+  const spawnOpts = {
+    env: cleanEnv,
+    stdio: ["ignore", "pipe", "pipe"]
+  };
+  if (cwd) spawnOpts.cwd = cwd;
+
+  const initial = await upsertJob({
+    ...job,
+    status: "running",
+    started_at: nowIso(),
+    stdout_log: stdoutLog,
+    stderr_log: stderrLog,
+    command: [scriptPath, ...cmdArgs].join(" ")
+  });
+
+  return await new Promise((resolve) => {
+    let resolved = false;
+    let stdoutExcerpt = "";
+    let stderrExcerpt = "";
+
+    const stdoutStream = fsSync.createWriteStream(stdoutLog, { flags: "a" });
+    const stderrStream = fsSync.createWriteStream(stderrLog, { flags: "a" });
+
+    const child = spawn(scriptPath, cmdArgs, spawnOpts);
+
+    const safeResolve = (payload) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(payload);
+      }
+    };
+
+    const closeStreams = () => {
+      stdoutStream.end();
+      stderrStream.end();
+    };
+
+    if (child.stdout) {
+      child.stdout.on("data", (chunk) => {
+        stdoutStream.write(chunk);
+        stdoutExcerpt = clipTail(stdoutExcerpt + chunk.toString("utf8"));
+      });
+    }
+
+    if (child.stderr) {
+      child.stderr.on("data", (chunk) => {
+        stderrStream.write(chunk);
+        stderrExcerpt = clipTail(stderrExcerpt + chunk.toString("utf8"));
+      });
+    }
+
+    child.once("error", (error) => {
+      void (async () => {
+        closeStreams();
+        const message = error?.message ?? String(error);
+        const failed = await upsertJob({
+          ...initial,
+          status: "failed",
+          finished_at: nowIso(),
+          exit_code: 1,
+          error: message,
+          stdout_excerpt: truncateText(stdoutExcerpt, maxJobExcerptChars),
+          stderr_excerpt: truncateText(clipTail(`${stderrExcerpt}\n${message}`), maxJobExcerptChars)
+        });
+
+        safeResolve({
+          ok: false,
+          job_id: failed.job_id,
+          mode: failed.mode,
+          status: failed.status,
+          stderr: failed.stderr_excerpt,
+          exit_code: failed.exit_code
+        });
+      })().catch(() => {
+        safeResolve({ ok: false, job_id: initial.job_id, mode: initial.mode, status: "failed", stderr: "Spawn failed", exit_code: 1 });
+      });
+    });
+
+    child.once("spawn", () => {
+      void (async () => {
+        const running = await upsertJob({
+          ...initial,
+          pid: child.pid
+        });
+
+        safeResolve({
+          ok: true,
+          background: true,
+          job_id: running.job_id,
+          mode: running.mode,
+          status: running.status,
+          pid: running.pid,
+          log_dir: running.log_dir,
+          message: `Job ${running.job_id} started in background (pid ${running.pid}). Poll ia_bridge_job_status and ia_bridge_job_result.`
+        });
+      })().catch(() => {
+        safeResolve({ ok: true, background: true, job_id: initial.job_id, mode: initial.mode, status: "running", pid: child.pid, log_dir: initial.log_dir });
+      });
+    });
+
+    child.once("close", (exitCode, signal) => {
+      void (async () => {
+        closeStreams();
+
+        const latest = (await getJob(initial.job_id)) ?? initial;
+        const completed = {
+          ...latest,
+          status: exitCode === 0 ? "succeeded" : "failed",
+          finished_at: nowIso(),
+          exit_code: typeof exitCode === "number" ? exitCode : 1,
+          signal: signal ?? null,
+          stdout_excerpt: truncateText(stdoutExcerpt, maxJobExcerptChars),
+          stderr_excerpt: truncateText(stderrExcerpt, maxJobExcerptChars)
+        };
+
+        if (completed.status === "succeeded") {
+          const parsed = completed.tool_name === "single_opinion_run"
+            ? parseSingleOpinionOutput(stdoutExcerpt, cwd ?? process.cwd())
+            : parseBridgeOutput(stdoutExcerpt, cwd ?? process.cwd());
+          completed.output_path = parsed.output_path;
+          completed.result_path = parsed.result_path;
+          completed.session_dir = parsed.session_dir;
+        }
+
+        await upsertJob(completed);
+      })().catch(() => {
+        // best effort background accounting
+      });
+    });
+
+    child.unref();
+  });
 }
 
-function parseLimit(raw, fallback = 20) {
-  if (raw === undefined || raw === null) return fallback;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) return fallback;
-  return Math.min(value, maxSessionListLimit);
+async function refreshJobHealth(job) {
+  if (!job || job.status !== "running") return job;
+  if (!job.pid || isPidAlive(job.pid)) return job;
+
+  const refreshed = await upsertJob({
+    ...job,
+    status: "failed",
+    finished_at: nowIso(),
+    error: job.error ?? "Background process is no longer alive.",
+    stderr_excerpt: job.stderr_excerpt ?? "Background process is no longer alive."
+  });
+  return refreshed;
+}
+
+async function buildJobResult(job, includeContent = true) {
+  let resolvedPath = job.result_path ?? job.output_path ?? null;
+
+  if (!resolvedPath && job.tool_name === "ia_bridge_run" && job.session_dir) {
+    const fallback = path.join(job.session_dir, "50-final-synthesis.md");
+    if (await fileExists(fallback)) resolvedPath = fallback;
+  }
+
+  let outputContent = null;
+  if (includeContent && resolvedPath && await fileExists(resolvedPath)) {
+    try {
+      outputContent = truncateText(await fs.readFile(resolvedPath, "utf8"), maxJobExcerptChars);
+    } catch {
+      outputContent = null;
+    }
+  }
+
+  return {
+    ok: true,
+    ready: job.status === "succeeded" || job.status === "failed",
+    job_id: job.job_id,
+    tool_name: job.tool_name,
+    mode: job.mode,
+    status: job.status,
+    pid: job.pid ?? null,
+    exit_code: job.exit_code ?? null,
+    signal: job.signal ?? null,
+    error: job.error ?? null,
+    created_at: job.created_at ?? null,
+    started_at: job.started_at ?? null,
+    finished_at: job.finished_at ?? null,
+    cwd: job.cwd ?? null,
+    log_dir: job.log_dir ?? null,
+    session_dir: job.session_dir ?? null,
+    output_path: job.output_path ?? null,
+    result_path: resolvedPath,
+    stdout_log: job.stdout_log ?? null,
+    stderr_log: job.stderr_log ?? null,
+    stdout_excerpt: job.stdout_excerpt ?? null,
+    stderr_excerpt: job.stderr_excerpt ?? null,
+    output_content: outputContent
+  };
 }
 
 class CompatStdioServerTransport {
@@ -295,8 +735,10 @@ class CompatStdioServerTransport {
   }
 }
 
+await loadPersistedJobs();
+
 const server = new Server(
-  { name: "ia-bridge-mcp", version: "2.1.0" },
+  { name: "ia-bridge-mcp", version: "2.2.0" },
   { capabilities: { tools: {}, resources: {} } }
 );
 
@@ -307,16 +749,112 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments ?? {};
 
-  // Extract cwd before passing remaining args as CLI flags
   const cwd = args.cwd ? String(args.cwd) : undefined;
   const scriptArgs = { ...args };
   delete scriptArgs.cwd;
 
   let result;
+
   if (toolName === "ia_bridge_run") {
-    result = await runScript(iaBridgeScript, scriptArgs, cwd);
+    const mode = parseMode(args.mode, "async", ["async"]);
+    if (!mode) {
+      result = { ok: false, stderr: "ia_bridge_run only supports mode=async", exit_code: 2 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    delete scriptArgs.mode;
+
+    const logDir = args.log_dir ? normalizePath(String(args.log_dir)) : defaultSessionsDir;
+    scriptArgs.log_dir = logDir;
+
+    const job = {
+      job_id: makeJobId("bridge"),
+      tool_name: "ia_bridge_run",
+      mode,
+      status: "queued",
+      created_at: nowIso(),
+      cwd: cwd ?? null,
+      log_dir: logDir,
+      args: scriptArgs
+    };
+
+    await upsertJob(job);
+    result = await runScriptBackgroundJob(job, iaBridgeScript, scriptArgs, cwd);
   } else if (toolName === "single_opinion_run") {
-    result = await runScript(secondOpinionScript, scriptArgs, cwd);
+    const mode = parseMode(args.mode, "async", ["sync", "async"]);
+    if (!mode) {
+      result = { ok: false, stderr: "single_opinion_run mode must be sync or async", exit_code: 2 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    delete scriptArgs.mode;
+
+    const logDir = args.log_dir ? normalizePath(String(args.log_dir)) : defaultOpinionsDir;
+    scriptArgs.log_dir = logDir;
+
+    const job = {
+      job_id: makeJobId("opinion"),
+      tool_name: "single_opinion_run",
+      mode,
+      status: "queued",
+      created_at: nowIso(),
+      cwd: cwd ?? null,
+      log_dir: logDir,
+      args: scriptArgs
+    };
+
+    await upsertJob(job);
+
+    if (mode === "sync") {
+      result = await runScriptSyncJob(job, secondOpinionScript, scriptArgs, cwd);
+    } else {
+      result = await runScriptBackgroundJob(job, secondOpinionScript, scriptArgs, cwd);
+    }
+  } else if (toolName === "ia_bridge_job_status") {
+    if (!args.job_id) {
+      result = { ok: false, stderr: "job_id is required", exit_code: 2 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const job = await getJob(String(args.job_id));
+    if (!job) {
+      result = { ok: false, stderr: `job not found: ${args.job_id}`, exit_code: 1 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const refreshed = await refreshJobHealth(job);
+    result = {
+      ok: true,
+      job_id: refreshed.job_id,
+      tool_name: refreshed.tool_name,
+      mode: refreshed.mode,
+      status: refreshed.status,
+      pid: refreshed.pid ?? null,
+      exit_code: refreshed.exit_code ?? null,
+      signal: refreshed.signal ?? null,
+      error: refreshed.error ?? null,
+      created_at: refreshed.created_at ?? null,
+      started_at: refreshed.started_at ?? null,
+      finished_at: refreshed.finished_at ?? null,
+      log_dir: refreshed.log_dir ?? null,
+      session_dir: refreshed.session_dir ?? null,
+      result_path: refreshed.result_path ?? refreshed.output_path ?? null
+    };
+  } else if (toolName === "ia_bridge_job_result") {
+    if (!args.job_id) {
+      result = { ok: false, stderr: "job_id is required", exit_code: 2 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const includeContent = args.include_content !== false;
+    const job = await getJob(String(args.job_id));
+    if (!job) {
+      result = { ok: false, stderr: `job not found: ${args.job_id}`, exit_code: 1 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    const refreshed = await refreshJobHealth(job);
+    result = await buildJobResult(refreshed, includeContent);
   } else if (toolName === "ia_bridge_list_sessions") {
     const base = args.log_dir ? normalizePath(args.log_dir) : defaultSessionsDir;
     try {

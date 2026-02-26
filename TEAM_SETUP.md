@@ -8,7 +8,7 @@ Shared MCP backend for Claude and Codex collaboration.
 ia-bridge-mcp (Node stdio MCP server)
   -> registered in Claude MCP config
   -> registered in Codex MCP config
-  -> exposes: ia_bridge_run, single_opinion_run, session list/read
+  -> exposes: ia_bridge_run, single_opinion_run, ia_bridge_job_status, ia_bridge_job_result, session list/read
 
 CLI wrappers: ia-bridge, claude-second-opinion
 Slash commands: /ia-bridge, /second-opinion
@@ -40,6 +40,11 @@ ia-bridge --task "Design safer rollout" --constraints "backward-compatible"
 ```
 
 Tool auto-detects repo context: `code` mode in git repos, `non-code` otherwise.
+
+Execution model:
+
+- `single_opinion_run`: async by default (`mode=async`), optional sync.
+- `ia_bridge_run`: async only; poll with `ia_bridge_job_status` and retrieve output via `ia_bridge_job_result`.
 
 ## Session Artifacts
 

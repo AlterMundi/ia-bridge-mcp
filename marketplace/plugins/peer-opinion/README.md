@@ -7,6 +7,11 @@ Claude/Codex collaboration commands backed by `ia-bridge-mcp`.
 - `/second-opinion [claude|codex] <task>`: run one reviewer with `single_opinion_run`.
 - `/ia-bridge <task>`: run full 3-round Claude/Codex bridge with `ia_bridge_run`.
 
+Execution defaults:
+
+- `single_opinion_run` uses `mode=async` unless sync is requested.
+- `ia_bridge_run` is async; use `ia_bridge_job_status` and `ia_bridge_job_result`.
+
 Bridge protocol stages:
 
 1. Shared context
