@@ -128,11 +128,6 @@ else
   fi
 fi
 
-if [[ "$REVIEWER" == "claude" ]]; then
-  REQUEST_HEADER="You are giving a second opinion on this coding task."
-else
-  REQUEST_HEADER="You are Codex giving a second opinion on this coding task."
-fi
 
 if [[ "$REVIEWER" == "claude" ]]; then
   RESPONSE_SECTION_TITLE="## Claude Response"
@@ -193,41 +188,21 @@ LOG_FILE="$LOG_DIR/${STAMP}-${REPO_SLUG}-${REVIEWER}-second-opinion.md"
 CODEX_CLI_LOG="$LOG_DIR/${STAMP}-${REPO_SLUG}-codex-cli.log"
 CODEX_LAST_MESSAGE_FILE="$LOG_DIR/${STAMP}-${REPO_SLUG}-codex-last-message.md"
 
-PROMPT="[CONTEXT]
-Working root: $WORK_ROOT
-Mode: $MODE
-Branch: $BRANCH
-Commit: $COMMIT
-Task: $TASK
-Constraints: ${CONSTRAINTS:-none}
-Worktree: $STATUS
+PROMPT="CTX root=$WORK_ROOT mode=$MODE branch=$BRANCH commit=$COMMIT tree=$STATUS
+TASK $TASK
+CONSTRAINTS ${CONSTRAINTS:-none}
+REVIEWER $REVIEWER
 
-[RECENT COMMITS]
+COMMITS
 $RECENT_COMMITS
 
-[REQUEST]
-$REQUEST_HEADER
-1) Proposed approach (brief)
-2) Exact edits (file paths)
-3) Test/verify commands
-4) Risks/edge cases and likely regressions
-5) One alternative approach that is higher upside but higher risk
-
-[DIFF PREVIEW]
+DIFF
 $DIFF_CONTENT
 
-[PROCESS RULES]
-- Use only provided context.
-- Do not invent files, commits, or commands that are not grounded in context.
-- If evidence is missing, state an explicit assumption.
-
-[OUTPUT FORMAT]
-- Findings first (ordered by severity)
-- Plan (max 6 bullets)
-- Patch-ready edits
-- Verification commands
-- Confidence + unknowns
-- Short rationale"
+R1:second-opinion
+RULES no-tools|ctx-only|no-invented|assume-explicit
+OUT findings-by-severity|plan-max-6|edits+paths|verify-commands|alternative+tradeoff|confidence+unknowns|rationale
+HUMAN-TL-DR prepend \"## TL;DR\" (2-3 sentences) before structured output"
 
 {
   echo "# Claude Second Opinion"

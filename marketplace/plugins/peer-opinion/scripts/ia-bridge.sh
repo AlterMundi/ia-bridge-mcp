@@ -241,12 +241,7 @@ if [[ ! -f "$SHARED_CONTEXT_FILE" ]]; then
     printf -- '- Claude model: %s\n' "$CLAUDE_MODEL"
     printf -- '- Codex model: %s\n' "$CODEX_MODEL"
     printf -- '- Timeout per round (s): %s\n\n' "$TIMEOUT_SECONDS"
-    printf '## Fairness Rules\n\n'
-    printf '1. Both agents receive the exact same task, constraints, and working context.\n'
-    printf '2. Both agents use the same evidence packet.\n'
-    printf '3. Both agents are asked for the same output shape.\n'
-    printf "4. Cross-critiques are symmetric (each critiques the other's proposal).\n"
-    printf '5. Final synthesis cites agreement, disagreements, and residual risks.\n\n'
+    printf '## Protocol\n\nsymmetric-ctx|same-evidence|same-shape|mutual-critique|synthesis=agree+disagree+risks\n\n'
     printf '## Recent Commits\n\n%s\n\n' "$RECENT_COMMITS"
     printf '## Diff Preview\n\n%s\n' "$DIFF_CONTENT"
   } > "$SHARED_CONTEXT_FILE"
@@ -254,21 +249,11 @@ fi
 
 if [[ ! -f "$ROUND1_PROMPT_FILE" ]]; then
   {
-    printf '[CONTEXT]\n'
-    printf 'Working root: %s\nMode: %s\nBranch: %s\nCommit: %s\nTask: %s\nConstraints: %s\nWorktree: %s\n\n' \
-      "$WORK_ROOT" "$MODE" "$BRANCH" "$COMMIT" "$TASK" "${CONSTRAINTS:-none}" "$STATUS"
-    printf '[RECENT COMMITS]\n%s\n\n' "$RECENT_COMMITS"
-    printf '[DIFF PREVIEW]\n%s\n\n' "$DIFF_CONTENT"
-    printf '[REQUEST]\nPropose your best solution independently.\n\n'
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context.\n- Do not invent files, commits, or command outputs.\n- If evidence is missing, state explicit assumptions.\n- Keep response concise and actionable.\n\n'
-    printf '[OUTPUT FORMAT]\n'
-    printf -- '- Findings first (ordered by severity)\n'
-    printf -- '- Plan (max 6 bullets)\n'
-    printf -- '- Patch-ready edits (file paths explicit)\n'
-    printf -- '- Verification commands\n'
-    printf -- '- One high-upside alternative approach (+ tradeoff)\n'
-    printf -- '- Confidence + unknowns\n'
-    printf -- '- Short rationale\n'
+    printf 'CTX root=%s mode=%s branch=%s commit=%s tree=%s\nTASK %s\nCONSTRAINTS %s\n\nCOMMITS\n%s\n\nDIFF\n%s\n\n' \
+      "$WORK_ROOT" "$MODE" "$BRANCH" "$COMMIT" "$STATUS" "$TASK" "${CONSTRAINTS:-none}" \
+      "$RECENT_COMMITS" "$DIFF_CONTENT"
+    printf 'R1:propose-best-solution\nRULES no-tools|ctx-only|no-invented|assume-explicit|concise\n'
+    printf 'OUT findings-by-severity|plan-max-6|edits+paths|verify-commands|alternative+tradeoff|confidence+unknowns|rationale\n'
   } > "$ROUND1_PROMPT_FILE"
 fi
 
@@ -292,33 +277,15 @@ fi
 
 if [[ ! -f "$CLAUDE_CRITIQUE_PROMPT" ]]; then
   {
-    printf "[TASK]\nCritique Codex's proposal against your own proposal for the same task.\n\n"
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Call out unsupported claims explicitly.\n\n'
-    printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
-    printf '[YOUR PROPOSAL - CLAUDE]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
-    printf '[OTHER PROPOSAL - CODEX]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
-    printf '[OUTPUT FORMAT]\n'
-    printf -- '- Strong agreements\n'
-    printf -- '- Critical disagreements\n'
-    printf -- '- Missing tests/risks in Codex proposal\n'
-    printf -- '- What you would adopt from Codex\n'
-    printf -- '- Revised recommendation\n'
+    printf 'R2:critique-peer SELF=claude PEER=codex\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
+      "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "$CLAUDE_ROUND1_FILE")" "$(cat "$CODEX_ROUND1_FILE")"
   } > "$CLAUDE_CRITIQUE_PROMPT"
 fi
 
 if [[ ! -f "$CODEX_CRITIQUE_PROMPT" ]]; then
   {
-    printf "[TASK]\nCritique Claude's proposal against your own proposal for the same task.\n\n"
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Call out unsupported claims explicitly.\n\n'
-    printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
-    printf '[YOUR PROPOSAL - CODEX]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
-    printf '[OTHER PROPOSAL - CLAUDE]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
-    printf '[OUTPUT FORMAT]\n'
-    printf -- '- Strong agreements\n'
-    printf -- '- Critical disagreements\n'
-    printf -- '- Missing tests/risks in Claude proposal\n'
-    printf -- '- What you would adopt from Claude\n'
-    printf -- '- Revised recommendation\n'
+    printf 'R2:critique-peer SELF=codex PEER=claude\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
+      "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "$CODEX_ROUND1_FILE")" "$(cat "$CLAUDE_ROUND1_FILE")"
   } > "$CODEX_CRITIQUE_PROMPT"
 fi
 
@@ -342,21 +309,9 @@ fi
 
 if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
   {
-    printf '[ROLE]\nYou are synthesizing a collaborative decision between Claude and Codex.\n\n'
-    printf '[PROCESS RULES]\n- Do not run tools or commands.\n- Use only the provided context and proposals.\n- Prefer recommendations backed by explicit evidence from the prior rounds.\n\n'
-    printf '[SHARED CONTEXT]\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
-    printf '[CLAUDE ROUND 1]\n%s\n\n' "$(cat "$CLAUDE_ROUND1_FILE")"
-    printf '[CODEX ROUND 1]\n%s\n\n' "$(cat "$CODEX_ROUND1_FILE")"
-    printf '[CLAUDE CRITIQUE]\n%s\n\n' "$(cat "$CLAUDE_CRITIQUE_FILE")"
-    printf '[CODEX CRITIQUE]\n%s\n\n' "$(cat "$CODEX_CRITIQUE_FILE")"
-    printf '[OUTPUT FORMAT]\n'
-    printf -- '- Final recommended approach\n'
-    printf -- '- Adopted points from Claude\n'
-    printf -- '- Adopted points from Codex\n'
-    printf -- '- Open disagreements not resolved\n'
-    printf -- '- Verification checklist\n'
-    printf -- '- Rollback plan\n'
-    printf -- '- Confidence + unresolved unknowns\n'
+    printf 'R3:synthesize\nRULES no-tools|evidence-backed\n\nCTX\n%s\n\nR1-CLAUDE\n%s\n\nR1-CODEX\n%s\n\nCRIT-CLAUDE\n%s\n\nCRIT-CODEX\n%s\n\nOUT final-approach|adopted-claude|adopted-codex|open-disagreements|verify-checklist|rollback|confidence+unknowns\nHUMAN-TL-DR prepend "## TL;DR" (3-5 plain sentences) before structured output\n' \
+      "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "$CLAUDE_ROUND1_FILE")" "$(cat "$CODEX_ROUND1_FILE")" \
+      "$(cat "$CLAUDE_CRITIQUE_FILE")" "$(cat "$CODEX_CRITIQUE_FILE")"
   } > "$SYNTHESIS_PROMPT"
 fi
 
