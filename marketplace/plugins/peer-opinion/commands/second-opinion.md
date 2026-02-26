@@ -1,22 +1,13 @@
 ---
-description: Run a structured single-pass second-opinion (Claude or Codex) through MCP bridge
+description: Run a structured single-pass second opinion (Claude or Codex) through ia-bridge MCP
 argument-hint: "[claude|codex] <task statement>"
 allowed-tools: ["mcp__ia-bridge-mcp__single_opinion_run"]
 ---
 
-Selection rule:
-- Use this command ONLY when the user explicitly asks for a "second opinion".
-- If the user asks for bridge/collaboration/Claude+Codex exchange, do NOT use this command; use `ia_bridge_run`.
-- Reviewer selection:
-  - If user specifies `claude` or `codex`, use that reviewer.
-  - If unspecified, default to `claude`.
+Use only when the user explicitly asks for a second opinion.
 
-Call MCP tool `single_opinion_run` with:
+1. Parse reviewer from `$ARGUMENTS` if present (`claude` or `codex`), default to `claude`.
+2. Call `single_opinion_run` with `task=<task-text>` and `reviewer=<reviewer>`.
+3. Report: log path, top 3 findings, confidence level, unknowns.
 
-- `task`: the task text from `$ARGUMENTS` (without reviewer token if provided)
-- `reviewer`: `claude` or `codex`
-
-Then show:
-1. Log file path
-2. Top 3 findings
-3. Confidence + key unknowns
+If the user requests a multi-round collaboration instead, use `ia_bridge_run`.

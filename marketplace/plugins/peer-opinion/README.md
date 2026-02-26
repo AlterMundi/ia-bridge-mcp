@@ -1,22 +1,22 @@
-# peer-opinion plugin
+# peer-opinion Plugin
 
-User-level collaboration plugin for Claude and Codex with a shared SDK-based MCP backend.
+Claude/Codex collaboration commands backed by `ia-bridge-mcp`.
 
 ## Commands
 
-- `/second-opinion [claude|codex] <task>`
-  Uses MCP tool `single_opinion_run` with reviewer selection.
+- `/second-opinion [claude|codex] <task>`: run one reviewer with `single_opinion_run`.
+- `/ia-bridge <task>`: run full 3-round Claude/Codex bridge with `ia_bridge_run`.
 
-- `/ia-bridge <task>`
-  Uses MCP tool `ia_bridge_run` and executes full two-agent protocol:
-  1. Shared context packet
-  2. Claude independent proposal
-  3. Codex independent proposal
-  4. Claude critiques Codex
-  5. Codex critiques Claude
-  6. Final synthesis
+Bridge protocol stages:
 
-## Logging
+1. Shared context
+2. Claude proposal
+3. Codex proposal
+4. Claude critique
+5. Codex critique
+6. Final synthesis
 
-- Claude-only: `~/.claude/opinions/`
+## Logs
+
+- Single opinions: `~/.claude/opinions/`
 - Bridge sessions: `~/.claude/ia-bridge/sessions/`

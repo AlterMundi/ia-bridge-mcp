@@ -1,77 +1,52 @@
-# Claude + Codex Exchange Baseline (Real CLI Integration)
+# ia-bridge-mcp Setup Reference
 
-This package provides a real shared backend for collaboration between Claude and Codex.
+Shared MCP backend for Claude and Codex collaboration.
 
-## Integration architecture
+## Topology
 
-- SDK-based MCP server: `ia-bridge-mcp`
-- Registered in both CLIs:
-  - `claude mcp`
-  - `codex mcp`
-- Both global commands call MCP tools (same backend):
-  - `claude-second-opinion`
-  - `ia-bridge`
-- Claude plugin slash commands also call MCP tools:
-  - `/second-opinion`
-  - `/ia-bridge`
+```text
+ia-bridge-mcp (Node stdio MCP server)
+  -> registered in Claude MCP config
+  -> registered in Codex MCP config
+  -> exposes: ia_bridge_run, single_opinion_run, session list/read
 
-Note for Codex CLI:
-- `codex mcp list` may show `Auth: Unsupported` for stdio servers.
-- This indicates no OAuth flow is configured for that server, not a connectivity failure.
+CLI wrappers: ia-bridge, claude-second-opinion
+Slash commands: /ia-bridge, /second-opinion
+```
 
-## Steps 2/3/4 implementation
+Codex may display `Auth: Unsupported` for stdio MCPs. That is expected and not a connectivity error.
 
-- Step 2: SDK MCP backend
-  - Server: `mcp/ia_bridge_mcp_server.mjs`
-  - Runtime: Node.js + `@modelcontextprotocol/sdk`
-  - Dependencies: `mcp/package.json` + `npm install`
-- Step 3: Register backend in both CLIs
-  - `claude mcp add -s user ia-bridge-mcp -- node <server-script>`
-  - `codex mcp add ia-bridge-mcp -- node <server-script>`
-- Step 4: Wire real CLI commands
-  - Global commands: `ia-bridge`, `claude-second-opinion`
-  - Claude slash commands: `/ia-bridge`, `/second-opinion`
-  - All call the same MCP tools and protocol handlers
+## Main Components
 
-## One-time install
+| File | Purpose |
+|---|---|
+| `mcp/ia_bridge_mcp_server.mjs` | MCP server entrypoint |
+| `marketplace/plugins/peer-opinion/scripts/ia-bridge.sh` | 3-round bridge protocol |
+| `marketplace/plugins/peer-opinion/scripts/claude-second-opinion.sh` | single-pass opinion |
+
+## Install
 
 ```bash
 cd ~/REPOS/Skills/mcps/ia-bridge-mcp
 ./install.sh
 ```
 
-## Usage
-
-Mode selection is automatic:
-- `code` mode when `cwd` is inside a git repository (includes branch/commit/diff/commits evidence)
-- `non-code` mode when no git repository is detected (same protocol, git evidence omitted)
-
-### Claude-only structured opinion
+## Use
 
 ```bash
-claude-second-opinion --task "Review this patch for regressions"
+claude-second-opinion --task "Review this patch"
+claude-second-opinion --reviewer codex --task "Review this patch"
+ia-bridge --task "Design safer rollout" --constraints "backward-compatible"
 ```
 
-Reviewer-specific single-pass opinion:
+Tool auto-detects repo context: `code` mode in git repos, `non-code` otherwise.
 
-```bash
-claude-second-opinion --reviewer codex --task "Review this patch for regressions"
-```
+## Session Artifacts
 
-### Full two-agent exchange (recommended)
+Bridge sessions are stored under `~/.claude/ia-bridge/sessions/<timestamp>-<repo>/`.
 
-```bash
-ia-bridge \
-  --task "Design safer rollout for installer migration" \
-  --constraints "Prefer backward-compatible minimal changes"
-```
+Typical files:
 
-## Output locations
-
-- Claude-only runs: `~/.claude/opinions/`
-- Bridge sessions: `~/.claude/ia-bridge/sessions/<timestamp>-<repo>/`
-
-Each bridge session includes:
 - `00-shared-context.md`
 - `10-claude-round1.md`
 - `20-codex-round1.md`
@@ -80,7 +55,7 @@ Each bridge session includes:
 - `50-final-synthesis.md`
 - `INDEX.md`
 
-## Remove
+## Uninstall
 
 ```bash
 cd ~/REPOS/Skills/mcps/ia-bridge-mcp
