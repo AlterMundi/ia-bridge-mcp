@@ -17,6 +17,13 @@ IA_BRIDGE_WRAPPER="${MARKETPLACE_DIR}/plugins/peer-opinion/scripts/ia-bridge-via
 USER_BIN_DIR="${HOME}/.local/bin"
 SECOND_OPINION_LINK="${USER_BIN_DIR}/claude-second-opinion"
 IA_BRIDGE_LINK="${USER_BIN_DIR}/ia-bridge"
+BRIDGE_AI_DIR="${HOME}/.bridge-ai"
+BRIDGE_OPINIONS_DIR="${BRIDGE_AI_DIR}/opinions"
+BRIDGE_SESSIONS_DIR="${BRIDGE_AI_DIR}/sessions"
+BRIDGE_JOBS_DIR="${BRIDGE_AI_DIR}/jobs"
+LEGACY_OPINIONS_DIR="${HOME}/.claude/opinions"
+LEGACY_SESSIONS_DIR="${HOME}/.claude/ia-bridge/sessions"
+LEGACY_JOBS_DIR="${HOME}/.claude/ia-bridge/jobs"
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "Error: claude CLI not found in PATH." >&2
@@ -55,17 +62,34 @@ fi
 
 has_marketplace() {
   if command -v rg >/dev/null 2>&1; then
-    claude plugin marketplace list 2>/dev/null | rg -q "${MARKETPLACE_NAME}"
+    claude plugin marketplace list --json 2>/dev/null | rg -q "\"name\"\\s*:\\s*\"${MARKETPLACE_NAME}\""
   else
-    claude plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}"
+    claude plugin marketplace list --json 2>/dev/null | grep -q "\"name\"[[:space:]]*:[[:space:]]*\"${MARKETPLACE_NAME}\""
   fi
 }
 
 has_plugin() {
   if command -v rg >/dev/null 2>&1; then
-    claude plugin list 2>/dev/null | rg -q "${PLUGIN_NAME}"
+    claude plugin list --json 2>/dev/null | rg -q "\"id\"\\s*:\\s*\"${PLUGIN_NAME}\""
   else
-    claude plugin list 2>/dev/null | grep -q "${PLUGIN_NAME}"
+    claude plugin list --json 2>/dev/null | grep -q "\"id\"[[:space:]]*:[[:space:]]*\"${PLUGIN_NAME}\""
+  fi
+}
+
+merge_legacy_dir() {
+  local src="$1"
+  local dst="$2"
+
+  if [[ ! -d "$src" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$dst"
+  shopt -s dotglob nullglob
+  local entries=("$src"/*)
+  shopt -u dotglob nullglob
+  if [[ ${#entries[@]} -gt 0 ]]; then
+    cp -a "${entries[@]}" "$dst"/ 2>/dev/null || true
   fi
 }
 
@@ -118,8 +142,14 @@ ln -sf "${SECOND_OPINION_WRAPPER}" "${SECOND_OPINION_LINK}"
 ln -sf "${IA_BRIDGE_WRAPPER}" "${IA_BRIDGE_LINK}"
 
 echo "[7/9] Preparing user log directories..."
-mkdir -p "${HOME}/.claude/opinions"
-mkdir -p "${HOME}/.claude/ia-bridge/sessions"
+mkdir -p "${BRIDGE_OPINIONS_DIR}"
+mkdir -p "${BRIDGE_SESSIONS_DIR}"
+mkdir -p "${BRIDGE_JOBS_DIR}"
+
+# One-time compatibility merge from legacy folders.
+merge_legacy_dir "${LEGACY_OPINIONS_DIR}" "${BRIDGE_OPINIONS_DIR}"
+merge_legacy_dir "${LEGACY_SESSIONS_DIR}" "${BRIDGE_SESSIONS_DIR}"
+merge_legacy_dir "${LEGACY_JOBS_DIR}" "${BRIDGE_JOBS_DIR}"
 
 echo "[8/9] Verifying scripts..."
 "${SECOND_OPINION_LINK}" --help >/dev/null
@@ -138,8 +168,9 @@ Global commands (MCP-backed):
   ia-bridge --task "<task>" --constraints "<optional>"
 
 Logs:
-  ~/.claude/opinions/
-  ~/.claude/ia-bridge/sessions/
+  ~/.bridge-ai/opinions/
+  ~/.bridge-ai/sessions/
+  ~/.bridge-ai/jobs/
 
 Interactive Claude plugin commands:
   /second-opinion <task>

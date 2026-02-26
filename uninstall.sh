@@ -22,4 +22,4 @@ rm -f "${HOME}/.local/bin/ia-bridge"
 rm -rf "${MCP_NODE_MODULES_DIR}"
 
 echo "Removed plugin, marketplace registration, MCP server registration, global executables, and SDK runtime."
-echo "Logs at ~/.claude/opinions and ~/.claude/ia-bridge/sessions were preserved."
+echo "Logs at ~/.bridge-ai (and legacy ~/.claude ia-bridge folders) were preserved."

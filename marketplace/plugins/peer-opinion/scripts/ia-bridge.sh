@@ -18,7 +18,7 @@ Options:
   --constraints <text>      Optional. Shared constraints for both AIs.
   --claude-model <name>     Optional. Claude model (default: opus).
   --codex-model <name>      Optional. Codex model (default: gpt-5).
-  --log-dir <path>          Optional. Session root (default: ~/.claude/ia-bridge/sessions).
+  --log-dir <path>          Optional. Session root (default: ~/.bridge-ai/sessions).
   --max-diff-lines <n>      Optional. Max diff lines in shared packet (default: 300).
   --timeout-seconds <n>     Optional. Per-call timeout in seconds (default: 240).
   -h, --help                Show this help.
@@ -48,7 +48,7 @@ TASK=""
 CONSTRAINTS=""
 CLAUDE_MODEL="opus"
 CODEX_MODEL="gpt-5"
-LOG_DIR="${HOME}/.claude/ia-bridge/sessions"
+LOG_DIR="${HOME}/.bridge-ai/sessions"
 MAX_DIFF_LINES=300
 TIMEOUT_SECONDS=240
 RESUME_DIR=""

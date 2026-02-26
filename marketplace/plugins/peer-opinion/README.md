@@ -23,5 +23,6 @@ Bridge protocol stages:
 
 ## Logs
 
-- Single opinions: `~/.claude/opinions/`
-- Bridge sessions: `~/.claude/ia-bridge/sessions/`
+- Single opinions: `~/.bridge-ai/opinions/`
+- Bridge sessions: `~/.bridge-ai/sessions/`
+- Job metadata/logs: `~/.bridge-ai/jobs/`

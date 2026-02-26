@@ -14,7 +14,7 @@ Options:
   --reviewer <name>         Optional. `claude` or `codex` (default: claude).
   --constraints <text>      Optional. Constraints for Claude.
   --model <name>            Optional. Model alias (default: reviewer-specific).
-  --log-dir <path>          Optional. Output directory (default: ~/.claude/opinions).
+  --log-dir <path>          Optional. Output directory (default: ~/.bridge-ai/opinions).
   --max-diff-lines <n>      Optional. Max diff lines in prompt (default: 300).
   --timeout-seconds <n>     Optional. Timeout in seconds (default: 180).
   -h, --help                Show this help.
@@ -34,7 +34,7 @@ TASK=""
 REVIEWER="claude"
 CONSTRAINTS=""
 MODEL=""
-LOG_DIR="${HOME}/.claude/opinions"
+LOG_DIR="${HOME}/.bridge-ai/opinions"
 MAX_DIFF_LINES=300
 TIMEOUT_SECONDS=180
 

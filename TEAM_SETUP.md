@@ -48,7 +48,7 @@ Execution model:
 
 ## Session Artifacts
 
-Bridge sessions are stored under `~/.claude/ia-bridge/sessions/<timestamp>-<repo>/`.
+Bridge sessions are stored under `~/.bridge-ai/sessions/<timestamp>-<repo>/`.
 
 Typical files:
 
