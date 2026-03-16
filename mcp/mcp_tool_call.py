@@ -79,7 +79,7 @@ def main() -> int:
                 "params": {
                     "protocolVersion": "2025-03-26",
                     "capabilities": {},
-                    "clientInfo": {"name": "ia-bridge-cli", "version": "2.1.0"},
+                    "clientInfo": {"name": "ia-bridge-cli", "version": "2.2.0"},
                 },
             },
         )

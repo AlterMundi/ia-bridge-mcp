@@ -21,6 +21,7 @@ BRIDGE_AI_DIR="${HOME}/.bridge-ai"
 BRIDGE_OPINIONS_DIR="${BRIDGE_AI_DIR}/opinions"
 BRIDGE_SESSIONS_DIR="${BRIDGE_AI_DIR}/sessions"
 BRIDGE_JOBS_DIR="${BRIDGE_AI_DIR}/jobs"
+BRIDGE_MIGRATED_SENTINEL="${BRIDGE_AI_DIR}/.migrated"
 LEGACY_OPINIONS_DIR="${HOME}/.claude/opinions"
 LEGACY_SESSIONS_DIR="${HOME}/.claude/forum/sessions"
 LEGACY_JOBS_DIR="${HOME}/.claude/forum/jobs"
@@ -146,10 +147,13 @@ mkdir -p "${BRIDGE_OPINIONS_DIR}"
 mkdir -p "${BRIDGE_SESSIONS_DIR}"
 mkdir -p "${BRIDGE_JOBS_DIR}"
 
-# One-time compatibility merge from legacy folders.
-merge_legacy_dir "${LEGACY_OPINIONS_DIR}" "${BRIDGE_OPINIONS_DIR}"
-merge_legacy_dir "${LEGACY_SESSIONS_DIR}" "${BRIDGE_SESSIONS_DIR}"
-merge_legacy_dir "${LEGACY_JOBS_DIR}" "${BRIDGE_JOBS_DIR}"
+# One-time compatibility merge from legacy folders (skipped on subsequent installs).
+if [[ ! -f "${BRIDGE_MIGRATED_SENTINEL}" ]]; then
+  merge_legacy_dir "${LEGACY_OPINIONS_DIR}" "${BRIDGE_OPINIONS_DIR}"
+  merge_legacy_dir "${LEGACY_SESSIONS_DIR}" "${BRIDGE_SESSIONS_DIR}"
+  merge_legacy_dir "${LEGACY_JOBS_DIR}" "${BRIDGE_JOBS_DIR}"
+  touch "${BRIDGE_MIGRATED_SENTINEL}"
+fi
 
 echo "[8/9] Verifying scripts..."
 "${SECOND_OPINION_LINK}" --help >/dev/null

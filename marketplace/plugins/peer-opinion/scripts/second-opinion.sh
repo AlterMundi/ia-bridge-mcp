@@ -239,10 +239,16 @@ if [[ "$REVIEWER" == "claude" ]]; then
   echo "$PROMPT" | "${CLAUDE_CMD[@]}" >> "$LOG_FILE"
   REVIEWER_EXIT_CODE=$?
 else
+  CODEX_EXTRA_FLAGS=""
+  if [[ "$MODE" == "non-code" ]]; then
+    CODEX_EXTRA_FLAGS="--skip-git-repo-check"
+  fi
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$TIMEOUT_SECONDS" codex exec -m "$MODEL" -C "$WORK_ROOT" --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
+    # shellcheck disable=SC2086
+    timeout "$TIMEOUT_SECONDS" codex exec -m "$MODEL" -C "$WORK_ROOT" $CODEX_EXTRA_FLAGS --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
   else
-    codex exec -m "$MODEL" -C "$WORK_ROOT" --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
+    # shellcheck disable=SC2086
+    codex exec -m "$MODEL" -C "$WORK_ROOT" $CODEX_EXTRA_FLAGS --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
   fi
   REVIEWER_EXIT_CODE=$?
   if [[ "$REVIEWER_EXIT_CODE" -eq 0 ]] && [[ -f "$CODEX_LAST_MESSAGE_FILE" ]]; then
@@ -253,14 +259,14 @@ set -e
 
 if [[ "$REVIEWER_EXIT_CODE" -ne 0 ]]; then
   if [[ "$REVIEWER_EXIT_CODE" -eq 124 ]]; then
-    echo "${REVIEWER^} call timed out after ${TIMEOUT_SECONDS}s. Partial log saved at: $LOG_FILE" >&2
+    echo "$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call timed out after ${TIMEOUT_SECONDS}s. Partial log saved at: $LOG_FILE" >&2
   else
-    echo "${REVIEWER^} call failed with exit code ${REVIEWER_EXIT_CODE}. Partial log saved at: $LOG_FILE" >&2
+    echo "$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call failed with exit code ${REVIEWER_EXIT_CODE}. Partial log saved at: $LOG_FILE" >&2
     if [[ "$REVIEWER" == "codex" ]]; then
       echo "Codex CLI log: $CODEX_CLI_LOG" >&2
     fi
   fi
-  echo "_${REVIEWER^} call failed or timed out. See command stderr for details._" >> "$LOG_FILE"
+  echo "_$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call failed or timed out. See command stderr for details._" >> "$LOG_FILE"
   exit 1
 fi
 
