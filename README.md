@@ -140,6 +140,10 @@ ia-bridge-mcp/
             └── second-opinion.md       # /second-opinion slash command definition
 ```
 
+## Privacy note
+
+When run inside a git repository, both scripts capture your current branch, recent commits, and `git diff HEAD` and include them in the prompts sent to Claude (Anthropic API) and Codex (OpenAI API). No data is sent to any other service. If you are working with sensitive code, review your API providers' data handling policies before use.
+
 ## Uninstall
 
 ```bash
