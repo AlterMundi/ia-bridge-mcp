@@ -1,7 +1,7 @@
 ---
 description: Run the full Claude<->Codex bridge protocol through forum MCP
 argument-hint: "<task statement>"
-allowed-tools: ["mcp__forum-mcp__ia_bridge_run", "mcp__forum-mcp__ia_bridge_job_status", "mcp__forum-mcp__ia_bridge_job_result", "mcp__forum-mcp__ia_bridge_read_file"]
+allowed-tools: ["mcp__ia-bridge-mcp__ia_bridge_run", "mcp__ia-bridge-mcp__ia_bridge_job_status", "mcp__ia-bridge-mcp__ia_bridge_job_result", "mcp__ia-bridge-mcp__ia_bridge_read_file"]
 ---
 
 Use when the user asks for bridge/collaboration/comparison across Claude and Codex.
