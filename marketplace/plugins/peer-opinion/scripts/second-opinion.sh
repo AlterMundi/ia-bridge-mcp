@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Allow running from within a Claude Code session (avoid nested-session detection)
-unset CLAUDECODE 2>/dev/null || true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../../../../lib/adapters.sh"
 
 usage() {
   cat <<'USAGE'
@@ -10,13 +11,14 @@ Usage:
   second-opinion.sh --task "<task description>" [options]
 
 Options:
-  --task <text>             Required. One-line task statement.
-  --reviewer <name>         Optional. `claude` or `codex` (default: claude).
-  --constraints <text>      Optional. Constraints for Claude.
-  --model <name>            Optional. Model alias (default: reviewer-specific).
-  --log-dir <path>          Optional. Output directory (default: ~/.bridge-ai/opinions).
-  --max-diff-lines <n>      Optional. Max diff lines in prompt (default: 300).
-  --timeout-seconds <n>     Optional. Timeout in seconds (default: 180).
+  --task <text>             Required. Task statement.
+  --reviewer <agent-id>     Optional. Agent id from config (default: first enabled agent).
+  --constraints <text>      Optional. Shared constraints.
+  --model <name>            Optional. Override the agent's default model.
+  --model-override <id:model>  Optional. Repeatable. Override model for a specific agent.
+  --log-dir <path>          Optional. Output root (default: ~/.bridge-ai/opinions).
+  --max-diff-lines <n>      Optional. Max diff lines (default: 300).
+  --timeout-seconds <n>     Optional. Per-call timeout (default: 240).
   -h, --help                Show this help.
 USAGE
 }
@@ -30,13 +32,39 @@ require_option_value() {
   fi
 }
 
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    "$@"
+    return
+  fi
+  # timeout(1) cannot run shell functions; detect and handle them directly
+  if type -t "$1" 2>/dev/null | grep -qx 'function'; then
+    local func="$1"
+    shift
+    "$func" "$@" &
+    local pid=$!
+    ( sleep "$seconds"; kill "$pid" 2>/dev/null || true ) &
+    local killer=$!
+    wait "$pid" 2>/dev/null || true
+    local rc=$?
+    kill "$killer" 2>/dev/null || true
+    return $rc
+  fi
+  timeout "$seconds" "$@"
+}
+
 TASK=""
-REVIEWER="claude"
 CONSTRAINTS=""
+REVIEWER=""
 MODEL=""
 LOG_DIR="${HOME}/.bridge-ai/opinions"
 MAX_DIFF_LINES=300
-TIMEOUT_SECONDS=180
+TIMEOUT_SECONDS=240
+
+# Collect repeatable overrides
+MODEL_OVERRIDES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +86,11 @@ while [[ $# -gt 0 ]]; do
     --model)
       require_option_value "$1" "${2:-}"
       MODEL="$2"
+      shift 2
+      ;;
+    --model-override)
+      require_option_value "$1" "${2:-}"
+      MODEL_OVERRIDES+=("$2")
       shift 2
       ;;
     --log-dir)
@@ -103,42 +136,25 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -le 0 ]]; the
   exit 1
 fi
 
-if [[ "$REVIEWER" != "claude" && "$REVIEWER" != "codex" ]]; then
-  echo "Error: --reviewer must be one of: claude, codex." >&2
+# Determine default reviewer if not provided
+AVAILABLE_AGENTS=$(bridge_agent_ids)
+if [[ -z "$REVIEWER" ]]; then
+  REVIEWER=$(head -n1 <<<"$AVAILABLE_AGENTS")
+fi
+
+if ! grep -qx "$REVIEWER" <<<"$AVAILABLE_AGENTS"; then
+  echo "Error: reviewer '$REVIEWER' is not an enabled agent." >&2
+  echo "Enabled agents: $(tr '\n' ' ' <<<"$AVAILABLE_AGENTS")" >&2
   exit 1
 fi
 
-if [[ -z "$MODEL" ]]; then
-  if [[ "$REVIEWER" == "claude" ]]; then
-    MODEL="opus"
-  else
-    MODEL="gpt-5"
+# Resolve model override for this reviewer
+RESOLVED_MODEL="$MODEL"
+for override in "${MODEL_OVERRIDES[@]}"; do
+  if [[ "$override" == "$REVIEWER:"* ]]; then
+    RESOLVED_MODEL="${override#*:}"
   fi
-fi
-
-if [[ "$REVIEWER" == "claude" ]]; then
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "Error: claude CLI not found in PATH." >&2
-    exit 1
-  fi
-else
-  if ! command -v codex >/dev/null 2>&1; then
-    echo "Error: codex CLI not found in PATH." >&2
-    exit 1
-  fi
-fi
-
-
-if [[ "$REVIEWER" == "claude" ]]; then
-  RESPONSE_SECTION_TITLE="## Claude Response"
-else
-  RESPONSE_SECTION_TITLE="## Codex Response"
-fi
-
-if ! command -v date >/dev/null 2>&1; then
-  echo "Error: date command not found in PATH." >&2
-  exit 1
-fi
+done
 
 START_DIR="$(pwd)"
 WORK_ROOT="$START_DIR"
@@ -164,7 +180,7 @@ if [[ "$MODE" == "code" ]]; then
 
   if git rev-parse --verify HEAD >/dev/null 2>&1; then
     DIFF_CONTENT="$(git --no-pager diff HEAD -- . | sed -n "1,${MAX_DIFF_LINES}p")"
-    RECENT_COMMITS="$(git --no-pager log --oneline -8)"
+    RECENT_COMMITS="$(git --no-pager log --oneline -10)"
   else
     DIFF_CONTENT="$(git --no-pager diff -- . | sed -n "1,${MAX_DIFF_LINES}p")"
     RECENT_COMMITS="(No commits yet.)"
@@ -181,93 +197,44 @@ else
   DIFF_CONTENT="(Unavailable in non-code mode: no git repository detected.)"
 fi
 
-mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REPO_SLUG="$(basename "$WORK_ROOT")"
-LOG_FILE="$LOG_DIR/${STAMP}-${REPO_SLUG}-${REVIEWER}-second-opinion.md"
-CODEX_CLI_LOG="$LOG_DIR/${STAMP}-${REPO_SLUG}-codex-cli.log"
-CODEX_LAST_MESSAGE_FILE="$LOG_DIR/${STAMP}-${REPO_SLUG}-codex-last-message.md"
+AGENT_NAME=$(bridge_agent_field "$REVIEWER" "name")
+OUTPUT_FILE="${LOG_DIR}/${STAMP}-${REPO_SLUG}-${REVIEWER}-second-opinion.md"
+mkdir -p "$LOG_DIR"
 
-PROMPT="CTX root=$WORK_ROOT mode=$MODE branch=$BRANCH commit=$COMMIT tree=$STATUS
-TASK $TASK
-CONSTRAINTS ${CONSTRAINTS:-none}
-REVIEWER $REVIEWER
-
-COMMITS
-$RECENT_COMMITS
-
-DIFF
-$DIFF_CONTENT
-
-R1:second-opinion
-RULES no-tools|ctx-only|no-invented|assume-explicit
-OUT findings-by-severity|plan-max-6|edits+paths|verify-commands|alternative+tradeoff|confidence+unknowns|rationale
-HUMAN-TL-DR prepend \"## TL;DR\" (2-3 sentences) before structured output"
+PROMPT_FILE="${LOG_DIR}/.tmp-second-opinion-$$-${RANDOM}.txt"
+trap 'rm -f "$PROMPT_FILE"' EXIT
 
 {
-  echo "# Claude Second Opinion"
-  echo
-  echo "- Timestamp: $(date -Iseconds)"
-  echo "- Working root: $WORK_ROOT"
-  echo "- Mode (auto): $MODE"
-  echo "- Branch: $BRANCH"
-  echo "- Commit: $COMMIT"
-  echo "- Worktree: $STATUS"
-  echo "- Reviewer: $REVIEWER"
-  echo "- Model: $MODEL"
-  echo "- Task: $TASK"
-  echo "- Constraints: ${CONSTRAINTS:-none}"
-  echo "- Timeout seconds: $TIMEOUT_SECONDS"
-  echo
-  echo "## Prompt"
-  echo
-  echo '```text'
-  echo "$PROMPT"
-  echo '```'
-  echo
-  echo "$RESPONSE_SECTION_TITLE"
-  echo
-} > "$LOG_FILE"
+  printf 'CTX root=%s mode=%s branch=%s commit=%s tree=%s\n' \
+    "$WORK_ROOT" "$MODE" "$BRANCH" "$COMMIT" "$STATUS"
+  printf 'TASK %s\n' "$TASK"
+  printf 'CONSTRAINTS %s\n\n' "${CONSTRAINTS:-none}"
+  printf 'COMMITS\n%s\n\n' "$RECENT_COMMITS"
+  printf 'DIFF\n%s\n\n' "$DIFF_CONTENT"
+  printf 'R1:single-opinion\nRULES no-tools|ctx-only|no-invented|assume-explicit|concise\n'
+  printf 'OUT findings-by-severity|confidence+unknowns|rationale\n'
+} > "$PROMPT_FILE"
 
-set +e
-if [[ "$REVIEWER" == "claude" ]]; then
-  if command -v timeout >/dev/null 2>&1; then
-    CLAUDE_CMD=(timeout "$TIMEOUT_SECONDS" claude -p --output-format text --model "$MODEL")
-  else
-    CLAUDE_CMD=(claude -p --output-format text --model "$MODEL")
-  fi
-  echo "$PROMPT" | "${CLAUDE_CMD[@]}" >> "$LOG_FILE"
-  REVIEWER_EXIT_CODE=$?
-else
-  CODEX_EXTRA_FLAGS=""
-  if [[ "$MODE" == "non-code" ]]; then
-    CODEX_EXTRA_FLAGS="--skip-git-repo-check"
-  fi
-  if command -v timeout >/dev/null 2>&1; then
-    # shellcheck disable=SC2086
-    timeout "$TIMEOUT_SECONDS" codex exec -m "$MODEL" -C "$WORK_ROOT" $CODEX_EXTRA_FLAGS --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
-  else
-    # shellcheck disable=SC2086
-    codex exec -m "$MODEL" -C "$WORK_ROOT" $CODEX_EXTRA_FLAGS --output-last-message "$CODEX_LAST_MESSAGE_FILE" - < <(printf '%s\n' "$PROMPT") >/dev/null 2>>"$CODEX_CLI_LOG"
-  fi
-  REVIEWER_EXIT_CODE=$?
-  if [[ "$REVIEWER_EXIT_CODE" -eq 0 ]] && [[ -f "$CODEX_LAST_MESSAGE_FILE" ]]; then
-    cat "$CODEX_LAST_MESSAGE_FILE" >> "$LOG_FILE"
-  fi
-fi
-set -e
+run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$REVIEWER" "$PROMPT_FILE" "$OUTPUT_FILE" "$WORK_ROOT" "$RESOLVED_MODEL"
 
-if [[ "$REVIEWER_EXIT_CODE" -ne 0 ]]; then
-  if [[ "$REVIEWER_EXIT_CODE" -eq 124 ]]; then
-    echo "$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call timed out after ${TIMEOUT_SECONDS}s. Partial log saved at: $LOG_FILE" >&2
-  else
-    echo "$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call failed with exit code ${REVIEWER_EXIT_CODE}. Partial log saved at: $LOG_FILE" >&2
-    if [[ "$REVIEWER" == "codex" ]]; then
-      echo "Codex CLI log: $CODEX_CLI_LOG" >&2
-    fi
-  fi
-  echo "_$(tr '[:lower:]' '[:upper:]' <<< "${REVIEWER:0:1}")${REVIEWER:1} call failed or timed out. See command stderr for details._" >> "$LOG_FILE"
-  exit 1
-fi
+# Prepend frontmatter
+FRONTMATTER_FILE="${LOG_DIR}/.tmp-fm-$$-${RANDOM}.md"
+trap 'rm -f "$FRONTMATTER_FILE" "$PROMPT_FILE"' EXIT
+{
+  printf -- '---\n'
+  printf 'agent-id: %s\n' "$REVIEWER"
+  printf 'agent-name: %s\n' "$AGENT_NAME"
+  printf 'model: %s\n' "${RESOLVED_MODEL:-default}"
+  printf 'timestamp: %s\n' "$(date -Iseconds)"
+  printf 'mode: %s\n' "$MODE"
+  printf 'branch: %s\n' "$BRANCH"
+  printf 'commit: %s\n' "$COMMIT"
+  printf -- '---\n\n'
+  cat "$OUTPUT_FILE"
+} > "$FRONTMATTER_FILE"
 
-echo "Second opinion saved to: $LOG_FILE"
+mv "$FRONTMATTER_FILE" "$OUTPUT_FILE"
+
+echo "Second opinion saved to: $OUTPUT_FILE"

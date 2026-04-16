@@ -22,104 +22,203 @@ const bridgeAiDir = path.join(os.homedir(), ".bridge-ai");
 const defaultSessionsDir = path.join(bridgeAiDir, "sessions");
 const defaultOpinionsDir = path.join(bridgeAiDir, "opinions");
 const defaultJobsDir = path.join(bridgeAiDir, "jobs");
+const configPath = path.join(bridgeAiDir, "config.json");
 const maxSessionListLimit = 200;
 const maxTextChars = 8000;
 const maxJobExcerptChars = 16000;
 const jobs = new Map();
 
-const tools = [
-  {
-    name: "ia_bridge_run",
-    description: "Run or resume full Claude<->Codex bridge protocol and persist session artifacts",
-    inputSchema: {
-      type: "object",
-      properties: {
-        task: { type: "string" },
-        resume: { type: "string", description: "Resume an interrupted session by directory path. Skips completed rounds." },
-        constraints: { type: "string" },
-        claude_model: { type: "string" },
-        codex_model: { type: "string" },
-        timeout_seconds: { type: "integer" },
-        max_diff_lines: { type: "integer" },
-        log_dir: { type: "string" },
-        cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
-        mode: { type: "string", enum: ["async"], description: "Execution mode. ia_bridge_run only supports async." }
-      },
-      required: []
-    }
+let bridgeConfig = null;
+let enabledAgentIds = ["claude", "codex"];
+let defaultReviewer = "claude";
+let defaultAgentA = "claude";
+let defaultAgentB = "codex";
+let defaultSynthesizer = "codex";
+let registeredClients = ["claude", "codex"];
+
+const bridgeV2Defaults = {
+  version: 2,
+  agents: {
+    claude: { enabled: true, name: "Claude Code", default_model: "opus", supports_mcp_registration: true },
+    codex: { enabled: true, name: "Codex", default_model: "o3", supports_mcp_registration: true },
+    hermes: { enabled: true, name: "Hermes Agent", default_model: "anthropic/claude-sonnet-4", supports_mcp_registration: false }
   },
-  {
-    name: "single_opinion_run",
-    description: "Run a structured single-pass second opinion with reviewer=claude|codex and save a markdown log",
-    inputSchema: {
-      type: "object",
-      properties: {
-        task: { type: "string" },
-        reviewer: { type: "string", enum: ["claude", "codex"] },
-        constraints: { type: "string" },
-        model: { type: "string" },
-        timeout_seconds: { type: "integer" },
-        max_diff_lines: { type: "integer" },
-        log_dir: { type: "string" },
-        cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
-        mode: { type: "string", enum: ["sync", "async"], description: "Execution mode (default: async)." }
-      },
-      required: ["task"]
-    }
-  },
-  {
-    name: "ia_bridge_job_status",
-    description: "Get execution status for a bridge/opinion job",
-    inputSchema: {
-      type: "object",
-      properties: {
-        job_id: { type: "string" }
-      },
-      required: ["job_id"]
-    }
-  },
-  {
-    name: "ia_bridge_job_result",
-    description: "Get final result details for a bridge/opinion job, including output path/content when available",
-    inputSchema: {
-      type: "object",
-      properties: {
-        job_id: { type: "string" },
-        include_content: { type: "boolean", description: "Include truncated output file content (default: true)." }
-      },
-      required: ["job_id"]
-    }
-  },
-  {
-    name: "ia_bridge_list_sessions",
-    description: "List recent IA bridge sessions (newest first)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        log_dir: { type: "string" },
-        limit: { type: "integer" }
-      }
-    }
-  },
-  {
-    name: "ia_bridge_read_file",
-    description: "Read a file from a session directory (path traversal blocked)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_dir: { type: "string" },
-        file_name: { type: "string" }
-      },
-      required: ["session_dir", "file_name"]
+  forum: { agent_a: "claude", agent_b: "codex", synthesizer: "codex" },
+  mcp: { registered_clients: ["claude", "codex"] },
+  runtime: { timeout_seconds: 300 }
+};
+
+async function loadConfig() {
+  let raw = null;
+  try {
+    const content = await fs.readFile(configPath, "utf8");
+    raw = JSON.parse(content);
+  } catch {
+    raw = null;
+  }
+
+  let config;
+  if (raw && (raw.version ?? 0) < 2) {
+    config = deepMerge(raw, bridgeV2Defaults);
+  } else if (raw) {
+    config = deepMerge(raw, bridgeV2Defaults);
+  } else {
+    config = JSON.parse(JSON.stringify(bridgeV2Defaults));
+  }
+
+  bridgeConfig = config;
+  enabledAgentIds = Object.entries(config.agents || {})
+    .filter(([, v]) => v.enabled)
+    .map(([k]) => k);
+  defaultReviewer = enabledAgentIds[0] || "claude";
+  defaultAgentA = config.forum?.agent_a || "claude";
+  defaultAgentB = config.forum?.agent_b || "codex";
+  defaultSynthesizer = config.forum?.synthesizer || "codex";
+  registeredClients = config.mcp?.registered_clients || ["claude", "codex"];
+}
+
+function deepMerge(user, defaults) {
+  if (user == null) return JSON.parse(JSON.stringify(defaults));
+  if (Array.isArray(user)) return user;
+  if (typeof user !== "object" || typeof defaults !== "object") return user;
+  const result = {};
+  for (const key of new Set([...Object.keys(defaults), ...Object.keys(user)])) {
+    if (key in user) {
+      result[key] = deepMerge(user[key], defaults[key]);
+    } else {
+      result[key] = JSON.parse(JSON.stringify(defaults[key]));
     }
   }
-];
+  return result;
+}
+
+function buildTools() {
+  const reviewerEnum = enabledAgentIds.length > 0 ? enabledAgentIds : ["claude", "codex"];
+  return [
+    {
+      name: "ia_bridge_run",
+      description: "Run or resume full multi-agent bridge protocol and persist session artifacts",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task: { type: "string" },
+          resume: { type: "string", description: "Resume an interrupted session by directory path. Skips completed rounds." },
+          constraints: { type: "string" },
+          agent_a: { type: "string", enum: reviewerEnum, description: "First agent (default: from config)." },
+          agent_b: { type: "string", enum: reviewerEnum, description: "Second agent (default: from config)." },
+          synthesizer: { type: "string", enum: reviewerEnum, description: "Synthesis agent (default: from config)." },
+          model_overrides: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Map of agent-id to model override, e.g. {claude: \"opus\", codex: \"o3\"}."
+          },
+          timeout_seconds: { type: "integer" },
+          max_diff_lines: { type: "integer" },
+          log_dir: { type: "string" },
+          cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
+          mode: { type: "string", enum: ["async"], description: "Execution mode. ia_bridge_run only supports async." }
+        },
+        required: []
+      }
+    },
+    {
+      name: "single_opinion_run",
+      description: "Run a structured single-pass second opinion with reviewer=<agent-id> and save a markdown log",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task: { type: "string" },
+          reviewer: { type: "string", enum: reviewerEnum, description: `Reviewer agent id (default: ${defaultReviewer}).` },
+          constraints: { type: "string" },
+          model: { type: "string", description: "Override model for the selected reviewer." },
+          model_overrides: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Map of agent-id to model override."
+          },
+          timeout_seconds: { type: "integer" },
+          max_diff_lines: { type: "integer" },
+          log_dir: { type: "string" },
+          cwd: { type: "string", description: "Working directory (git auto-detected if available)" },
+          mode: { type: "string", enum: ["sync", "async"], description: "Execution mode (default: async)." }
+        },
+        required: ["task"]
+      }
+    },
+    {
+      name: "ia_bridge_job_status",
+      description: "Get execution status for a bridge/opinion job",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string" }
+        },
+        required: ["job_id"]
+      }
+    },
+    {
+      name: "ia_bridge_job_result",
+      description: "Get final result details for a bridge/opinion job, including output path/content when available",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string" },
+          include_content: { type: "boolean", description: "Include truncated output file content (default: true)." }
+        },
+        required: ["job_id"]
+      }
+    },
+    {
+      name: "ia_bridge_list_sessions",
+      description: "List recent IA bridge sessions (newest first)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          log_dir: { type: "string" },
+          limit: { type: "integer" }
+        }
+      }
+    },
+    {
+      name: "ia_bridge_read_file",
+      description: "Read a file from a session directory (path traversal blocked)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          session_dir: { type: "string" },
+          file_name: { type: "string" }
+        },
+        required: ["session_dir", "file_name"]
+      }
+    }
+  ];
+}
 
 function argsToFlags(args) {
   const cmd = [];
   for (const [key, value] of Object.entries(args ?? {})) {
     if (value === null || value === undefined || value === "") continue;
     const flag = `--${key.replaceAll("_", "-")}`;
+
+    if (key === "model_overrides" && typeof value === "object" && !Array.isArray(value)) {
+      for (const [agentId, model] of Object.entries(value)) {
+        if (model !== null && model !== undefined && model !== "") {
+          cmd.push("--model-override", `${agentId}:${model}`);
+        }
+      }
+      continue;
+    }
+
+    if (key === "model_override") {
+      const list = Array.isArray(value) ? value : [value];
+      for (const item of list) {
+        if (item !== null && item !== undefined && item !== "") {
+          cmd.push("--model-override", String(item));
+        }
+      }
+      continue;
+    }
+
     if (typeof value === "boolean") {
       if (value) cmd.push(flag);
       continue;
@@ -396,7 +495,7 @@ async function runScriptBackgroundJob(job, scriptPath, args, cwd) {
       mode: failed.mode,
       status: failed.status,
       stderr: scriptCheck.stderr,
-      exit_code: scriptCheck.exit_code
+      exit_code: failed.exit_code
     };
   }
 
@@ -736,10 +835,13 @@ class CompatStdioServerTransport {
   }
 }
 
+await loadConfig();
 await loadPersistedJobs();
 
+const tools = buildTools();
+
 const server = new Server(
-  { name: "ia-bridge-mcp", version: "2.2.0" },
+  { name: "ia-bridge-mcp", version: "2.3.0" },
   { capabilities: { tools: {}, resources: {} } }
 );
 
@@ -792,6 +894,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     const logDir = args.log_dir ? normalizePath(String(args.log_dir)) : defaultOpinionsDir;
     scriptArgs.log_dir = logDir;
+
+    // Backwards compatibility: translate old reviewer string to current default
+    if (!scriptArgs.reviewer && scriptArgs.reviewer !== "") {
+      scriptArgs.reviewer = defaultReviewer;
+    }
 
     const job = {
       job_id: makeJobId("opinion"),
