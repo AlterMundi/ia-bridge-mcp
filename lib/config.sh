@@ -60,7 +60,11 @@ _BRIDGE_V2_DEFAULTS='{
 }'
 
 bridge_config_path() {
-  echo "$BRIDGE_CONFIG_FILE"
+  if [[ -n "${BRIDGE_CONFIG_PATH:-}" ]]; then
+    echo "$BRIDGE_CONFIG_PATH"
+  else
+    echo "${HOME}/.bridge-ai/config.json"
+  fi
 }
 
 bridge__load_raw_config() {

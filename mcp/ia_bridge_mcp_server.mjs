@@ -18,6 +18,7 @@ const root = path.resolve(__dirname, "..");
 const scriptsDir = path.join(root, "marketplace", "plugins", "peer-opinion", "scripts");
 const secondOpinionScript = path.join(scriptsDir, "second-opinion.sh");
 const forumScript = path.join(scriptsDir, "forum.sh");
+const buildScript = path.join(scriptsDir, "build.sh");
 const bridgeAiDir = path.join(os.homedir(), ".bridge-ai");
 const defaultSessionsDir = path.join(bridgeAiDir, "sessions");
 const defaultOpinionsDir = path.join(bridgeAiDir, "opinions");
@@ -31,6 +32,7 @@ const jobs = new Map();
 let bridgeConfig = null;
 let enabledAgentIds = ["claude", "codex"];
 let defaultReviewer = "claude";
+let defaultBuildAgent = "grok";
 let defaultAgentA = "claude";
 let defaultAgentB = "codex";
 let defaultSynthesizer = "codex";
@@ -41,7 +43,8 @@ const bridgeV2Defaults = {
   agents: {
     claude: { enabled: true, name: "Claude Code", default_model: "opus", supports_mcp_registration: true },
     codex: { enabled: true, name: "Codex", default_model: "o3", supports_mcp_registration: true },
-    hermes: { enabled: true, name: "Hermes Agent", default_model: "anthropic/claude-sonnet-4", supports_mcp_registration: false }
+    hermes: { enabled: true, name: "Hermes Agent", default_model: "anthropic/claude-sonnet-4", supports_mcp_registration: false },
+    grok: { enabled: true, name: "Grok Build", default_model: "grok-4.3", supports_mcp_registration: false }
   },
   forum: { agent_a: "claude", agent_b: "codex", synthesizer: "codex" },
   mcp: { registered_clients: ["claude", "codex"] },
@@ -71,6 +74,7 @@ async function loadConfig() {
     .filter(([, v]) => v.enabled)
     .map(([k]) => k);
   defaultReviewer = enabledAgentIds[0] || "claude";
+  defaultBuildAgent = enabledAgentIds.includes("grok") ? "grok" : (enabledAgentIds[0] || "grok");
   defaultAgentA = config.forum?.agent_a || "claude";
   defaultAgentB = config.forum?.agent_b || "codex";
   defaultSynthesizer = config.forum?.synthesizer || "codex";
@@ -78,7 +82,7 @@ async function loadConfig() {
 }
 
 function deepMerge(user, defaults) {
-  if (user == null) return JSON.parse(JSON.stringify(defaults));
+  if (user == null) return defaults == null ? null : JSON.parse(JSON.stringify(defaults));
   if (Array.isArray(user)) return user;
   if (typeof user !== "object" || typeof defaults !== "object") return user;
   const result = {};
@@ -104,8 +108,9 @@ function buildTools() {
           task: { type: "string" },
           resume: { type: "string", description: "Resume an interrupted session by directory path. Skips completed rounds." },
           constraints: { type: "string" },
-          agent_a: { type: "string", enum: reviewerEnum, description: "First agent (default: from config)." },
-          agent_b: { type: "string", enum: reviewerEnum, description: "Second agent (default: from config)." },
+          agents: { type: "array", items: { type: "string", enum: reviewerEnum }, description: "List of forum agents (default: from config forum.agents or forum.agent_a + forum.agent_b). Overrides agent_a/agent_b when provided." },
+          agent_a: { type: "string", enum: reviewerEnum, description: "First agent (legacy, default: from config). Ignored when agents is provided." },
+          agent_b: { type: "string", enum: reviewerEnum, description: "Second agent (legacy, default: from config). Ignored when agents is provided." },
           synthesizer: { type: "string", enum: reviewerEnum, description: "Synthesis agent (default: from config)." },
           model_overrides: {
             type: "object",
@@ -146,8 +151,48 @@ function buildTools() {
       }
     },
     {
+      name: "ia_bridge_build",
+      description: `Delegate a coding or implementation task to an autonomous AI agent that writes code, runs tests, and reports results. The agent executes in headless mode with tool access to the current repository. Results are saved to ~/.bridge-ai/builds/. Available agents: ${enabledAgentIds.join(", ")}. Default agent: ${defaultBuildAgent}. Use this when the user asks to implement, build, code, fix, or refactor something autonomously.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          task: {
+            type: "string",
+            description: "The implementation task. Be specific about what to change, which files are involved, and acceptance criteria. The agent has full access to the git repository (read, write, execute). Include relevant context like branch, commit, or dependencies."
+          },
+          agent: {
+            type: "string",
+            enum: reviewerEnum,
+            description: `Which AI agent to use for the build. Default: ${defaultBuildAgent}. Each agent uses its own CLI with pre-configured flags for autonomous execution (auto-approve, max effort where supported).`
+          },
+          constraints: {
+            type: "string",
+            description: "Optional constraints or requirements. Appended to the build prompt as a CONSTRAINTS section. Examples: 'must be backward compatible', 'use only async/await', 'follow existing patterns in src/utils/'."
+          },
+          model: { type: "string", description: "Override the default model for the selected agent." },
+          model_overrides: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "Map of agent-id to model override, e.g. {\"grok\": \"grok-4.3\", \"claude\": \"opus\"}."
+          },
+          with_review: {
+            type: "boolean",
+            description: "If true, automatically runs a second-opinion review after the build completes, using the first enabled agent as reviewer. Default: false."
+          },
+          effort: { type: "string", description: "Override effort/reasoning level (agent-dependent). Not all agents support this." },
+          max_turns: { type: "integer", description: "Maximum agent turns for the build. Default: 80." },
+          timeout_seconds: { type: "integer", description: "Per-call timeout in seconds. Default: 600." },
+          max_diff_lines: { type: "integer", description: "Maximum git diff lines to include as context. Default: 300." },
+          log_dir: { type: "string", description: "Directory for build output. Default: ~/.bridge-ai/builds/." },
+          cwd: { type: "string", description: "Working directory. Auto-detected from git if available." },
+          mode: { type: "string", enum: ["sync", "async"], description: "Execution mode. 'async' (default) returns immediately with a job ID. 'sync' blocks until completion." }
+        },
+        required: ["task"]
+      }
+    },
+    {
       name: "ia_bridge_job_status",
-      description: "Get execution status for a bridge/opinion job",
+      description: "Get execution status for a bridge/opinion/build job",
       inputSchema: {
         type: "object",
         properties: {
@@ -883,6 +928,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     await upsertJob(job);
     result = await runScriptBackgroundJob(job, forumScript, scriptArgs, cwd);
+  } else if (toolName === "ia_bridge_build") {
+    const mode = parseMode(args.mode, "async", ["sync", "async"]);
+    if (!mode) {
+      result = { ok: false, stderr: "ia_bridge_build mode must be sync or async", exit_code: 2 };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    delete scriptArgs.mode;
+
+    const logDir = args.log_dir ? normalizePath(String(args.log_dir)) : path.join(os.homedir(), ".bridge-ai", "builds");
+    scriptArgs.log_dir = logDir;
+
+    if (!scriptArgs.agent || scriptArgs.agent === "") {
+      scriptArgs.agent = defaultBuildAgent;
+    }
+
+    const job = {
+      job_id: makeJobId("build"),
+      tool_name: "ia_bridge_build",
+      mode,
+      status: "queued",
+      created_at: nowIso(),
+      cwd: cwd ?? null,
+      log_dir: logDir,
+      args: scriptArgs
+    };
+
+    await upsertJob(job);
+
+    if (mode === "sync") {
+      result = await runScriptSyncJob(job, buildScript, scriptArgs, cwd);
+    } else {
+      result = await runScriptBackgroundJob(job, buildScript, scriptArgs, cwd);
+    }
   } else if (toolName === "single_opinion_run") {
     const mode = parseMode(args.mode, "async", ["sync", "async"]);
     if (!mode) {

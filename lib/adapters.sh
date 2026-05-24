@@ -62,7 +62,7 @@ bridge_run_agent() {
     (.agents[$id].capabilities.env_unset // []) | join("\n")
   ' <<<"$config")
 
-  local prompt_text
+  local prompt_text=""
   if [[ "$prompt_transport" == "arg" ]]; then
     if [[ -n "$max_bytes" ]] && bridge__is_positive_int "$max_bytes"; then
       prompt_text=$(head -c "$max_bytes" "$prompt_file")

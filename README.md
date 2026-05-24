@@ -1,4 +1,5 @@
 # ia-bridge-mcp
+<!-- Reviewed by forum -->
 
 A Model Context Protocol (MCP) server that enables structured collaboration between **multiple AI agents** — independent AI assistants reviewing your code or decisions together, without either seeing the other's work until the right moment.
 
@@ -23,8 +24,38 @@ Out of the box, `ia-bridge-mcp` supports any combination of:
 - [Claude Code](https://claude.ai/code) (`claude` CLI)
 - [Codex CLI](https://github.com/openai/codex) (`codex` CLI)
 - [Hermes Agent](https://github.com/hermes-ai/cli) (`hermes` CLI)
+- [Grok Build](https://x.ai) (`grok` CLI)
 
 You can enable/disable agents and choose forum defaults via `~/.bridge-ai/config.json`.
+
+## Grok Adapter
+
+Para usar Grok Build como agente, agregá lo siguiente en `~/.bridge-ai/config.json`:
+
+```json
+"grok": {
+  "enabled": true,
+  "name": "Grok Build",
+  "command": "grok",
+  "args": [
+    "--single",
+    "{{prompt}}",
+    "--effort", "max",
+    "--always-approve",
+    "--max-turns", "80",
+    "--output-format", "plain"
+  ],
+  "prompt_transport": "arg",
+  "output_mode": "stdout",
+  "default_model": "grok-4.3",
+  "max_prompt_bytes": 200000,
+  "supports_mcp_registration": false,
+  "capabilities": {}
+}
+```
+
+Este adapter usa modo headless (`--single`) con aprobación automática y effort máximo, ideal para tareas de implementación autónoma.
+
 
 ## Prerequisites
 
@@ -54,7 +85,7 @@ The installer will:
 ### Non-interactive install
 
 ```bash
-./install.sh --non-interactive --agents claude,codex,hermes --forum-defaults claude,codex,hermes
+./install.sh --non-interactive --agents claude,codex,hermes,grok --forum-defaults claude,codex,hermes
 ```
 
 > **Note:** Codex may display `Auth: Unsupported` for stdio MCPs — this is expected and does not affect functionality.

@@ -15,8 +15,9 @@ Options:
   --task <text>             Required (new session). Shared task statement.
   --resume <session-dir>    Resume an interrupted session by directory path.
   --constraints <text>      Optional. Shared constraints for all AIs.
-  --agent-a <agent-id>      Optional. First agent (default: from config forum.agent_a).
-  --agent-b <agent-id>      Optional. Second agent (default: from config forum.agent_b).
+  --agents <id1,id2,...>    Optional. Comma-separated list of agents (default: from config forum.agents or forum.agent_a,forum.agent_b).
+  --agent-a <agent-id>      Optional. First agent (legacy, default: from config forum.agent_a).
+  --agent-b <agent-id>      Optional. Second agent (legacy, default: from config forum.agent_b).
   --synthesizer <agent-id>  Optional. Synthesis agent (default: from config forum.synthesizer).
   --model-override <id:model>  Optional. Repeatable. Override model for a specific agent.
   --log-dir <path>          Optional. Session root (default: ~/.bridge-ai/sessions).
@@ -60,6 +61,7 @@ run_with_timeout() {
 
 TASK=""
 CONSTRAINTS=""
+AGENTS_STR=""
 AGENT_A=""
 AGENT_B=""
 SYNTHESIZER=""
@@ -85,6 +87,11 @@ while [[ $# -gt 0 ]]; do
     --constraints)
       require_option_value "$1" "${2:-}"
       CONSTRAINTS="$2"
+      shift 2
+      ;;
+    --agents)
+      require_option_value "$1" "${2:-}"
+      AGENTS_STR="$2"
       shift 2
       ;;
     --agent-a)
@@ -160,18 +167,36 @@ fi
 
 AVAILABLE_AGENTS=$(bridge_agent_ids)
 
-# Defaults from config
-AGENT_A="${AGENT_A:-$(bridge_forum_default agent_a)}"
-AGENT_B="${AGENT_B:-$(bridge_forum_default agent_b)}"
+# Build AGENTS array
+AGENTS=()
+
+if [[ -n "$AGENTS_STR" ]]; then
+  IFS=',' read -ra AGENTS <<< "$AGENTS_STR"
+else
+  # Fallback to legacy agent-a / agent-b or config defaults
+  local_agent_a="${AGENT_A:-$(bridge_forum_default agent_a)}"
+  local_agent_b="${AGENT_B:-$(bridge_forum_default agent_b)}"
+  AGENTS+=("$local_agent_a")
+  AGENTS+=("$local_agent_b")
+fi
+
 SYNTHESIZER="${SYNTHESIZER:-$(bridge_forum_default synthesizer)}"
 
-for agent in "$AGENT_A" "$AGENT_B" "$SYNTHESIZER"; do
+# Validate all agents are enabled
+for agent in "${AGENTS[@]}" "$SYNTHESIZER"; do
   if ! grep -qx "$agent" <<<"$AVAILABLE_AGENTS"; then
     echo "Error: agent '$agent' is not an enabled agent." >&2
     echo "Enabled agents: $(tr '\n' ' ' <<<"$AVAILABLE_AGENTS")" >&2
     exit 1
   fi
 done
+
+NUM_AGENTS=${#AGENTS[@]}
+
+if [[ "$NUM_AGENTS" -lt 2 ]]; then
+  echo "Error: Forum requires at least 2 agents. Got: ${AGENTS[*]}" >&2
+  exit 1
+fi
 
 START_DIR="$(pwd)"
 WORK_ROOT="$START_DIR"
@@ -214,9 +239,9 @@ else
   DIFF_CONTENT="(Unavailable in non-code mode: no git repository detected.)"
 fi
 
-AGENT_A_NAME=$(bridge_agent_field "$AGENT_A" "name")
-AGENT_B_NAME=$(bridge_agent_field "$AGENT_B" "name")
-SYNTH_NAME=$(bridge_agent_field "$SYNTHESIZER" "name")
+# Agent metadata arrays
+AGENT_NAMES=()
+AGENT_MODELS=()
 
 resolve_model() {
   local id="$1"
@@ -229,8 +254,12 @@ resolve_model() {
   echo ""
 }
 
-AGENT_A_MODEL=$(resolve_model "$AGENT_A")
-AGENT_B_MODEL=$(resolve_model "$AGENT_B")
+for agent in "${AGENTS[@]}"; do
+  AGENT_NAMES+=("$(bridge_agent_field "$agent" "name")")
+  AGENT_MODELS+=("$(resolve_model "$agent")")
+done
+
+SYNTH_NAME=$(bridge_agent_field "$SYNTHESIZER" "name")
 SYNTH_MODEL=$(resolve_model "$SYNTHESIZER")
 
 if [[ -n "$RESUME_DIR" ]]; then
@@ -251,35 +280,44 @@ fi
 
 SHARED_CONTEXT_FILE="$SESSION_DIR/00-shared-context.md"
 ROUND1_PROMPT_FILE="$SESSION_DIR/01-round1-shared-prompt.txt"
-A_ROUND1_FILE="$SESSION_DIR/10-agent-a-round1.md"
-B_ROUND1_FILE="$SESSION_DIR/20-agent-b-round1.md"
-A_CRITIQUE_PROMPT="$SESSION_DIR/31-agent-a-critique.prompt.txt"
-B_CRITIQUE_PROMPT="$SESSION_DIR/32-agent-b-critique.prompt.txt"
-A_CRITIQUE_FILE="$SESSION_DIR/30-agent-a-critique.md"
-B_CRITIQUE_FILE="$SESSION_DIR/40-agent-b-critique.md"
-SYNTHESIS_PROMPT="$SESSION_DIR/51-synthesis.prompt.txt"
-SYNTHESIS_FILE="$SESSION_DIR/50-final-synthesis.md"
 INDEX_FILE="$SESSION_DIR/INDEX.md"
-A_LOG="$SESSION_DIR/agent-a.log"
-B_LOG="$SESSION_DIR/agent-b.log"
+
+# Build file arrays
+ROUND1_FILES=()
+CRITIQUE_PROMPTS=()
+CRITIQUE_FILES=()
+AGENT_LOGS=()
+
+for i in "${!AGENTS[@]}"; do
+  idx=$((i + 1))
+  ROUND1_FILES+=("$SESSION_DIR/$(printf "%02d-agent-%d-round1.md" "$idx" "$i")")
+  CRITIQUE_PROMPTS+=("$SESSION_DIR/$(printf "%02d-agent-%d-critique.prompt.txt" "$idx" "$i")")
+  CRITIQUE_FILES+=("$SESSION_DIR/$(printf "%02d-agent-%d-critique.md" "$idx" "$i")")
+  AGENT_LOGS+=("$SESSION_DIR/agent-$i.log")
+done
+
+SYNTHESIS_PROMPT="$SESSION_DIR/99-synthesis.prompt.txt"
+SYNTHESIS_FILE="$SESSION_DIR/98-final-synthesis.md"
 SYNTH_LOG="$SESSION_DIR/synth.log"
 
-# Legacy file compatibility mapping
+# Legacy file compatibility mapping (only for 2-agent sessions)
 map_legacy_files() {
-  if [[ -f "$SESSION_DIR/10-claude-round1.md" && ! -f "$A_ROUND1_FILE" ]]; then
-    cp "$SESSION_DIR/10-claude-round1.md" "$A_ROUND1_FILE"
-  fi
-  if [[ -f "$SESSION_DIR/20-codex-round1.md" && ! -f "$B_ROUND1_FILE" ]]; then
-    cp "$SESSION_DIR/20-codex-round1.md" "$B_ROUND1_FILE"
-  fi
-  if [[ -f "$SESSION_DIR/30-claude-critiques-codex.md" && ! -f "$A_CRITIQUE_FILE" ]]; then
-    cp "$SESSION_DIR/30-claude-critiques-codex.md" "$A_CRITIQUE_FILE"
-  fi
-  if [[ -f "$SESSION_DIR/40-codex-critiques-claude.md" && ! -f "$B_CRITIQUE_FILE" ]]; then
-    cp "$SESSION_DIR/40-codex-critiques-claude.md" "$B_CRITIQUE_FILE"
-  fi
-  if [[ -f "$SESSION_DIR/50-final-synthesis.md" && ! -f "$SYNTHESIS_FILE" ]]; then
-    cp "$SESSION_DIR/50-final-synthesis.md" "$SYNTHESIS_FILE"
+  if [[ "$NUM_AGENTS" -eq 2 ]]; then
+    if [[ -f "$SESSION_DIR/10-claude-round1.md" && ! -f "${ROUND1_FILES[0]}" ]]; then
+      cp "$SESSION_DIR/10-claude-round1.md" "${ROUND1_FILES[0]}"
+    fi
+    if [[ -f "$SESSION_DIR/20-codex-round1.md" && ! -f "${ROUND1_FILES[1]}" ]]; then
+      cp "$SESSION_DIR/20-codex-round1.md" "${ROUND1_FILES[1]}"
+    fi
+    if [[ -f "$SESSION_DIR/30-claude-critiques-codex.md" && ! -f "${CRITIQUE_FILES[0]}" ]]; then
+      cp "$SESSION_DIR/30-claude-critiques-codex.md" "${CRITIQUE_FILES[0]}"
+    fi
+    if [[ -f "$SESSION_DIR/40-codex-critiques-claude.md" && ! -f "${CRITIQUE_FILES[1]}" ]]; then
+      cp "$SESSION_DIR/40-codex-critiques-claude.md" "${CRITIQUE_FILES[1]}"
+    fi
+    if [[ -f "$SESSION_DIR/50-final-synthesis.md" && ! -f "$SYNTHESIS_FILE" ]]; then
+      cp "$SESSION_DIR/50-final-synthesis.md" "$SYNTHESIS_FILE"
+    fi
   fi
 }
 map_legacy_files
@@ -316,8 +354,10 @@ if [[ ! -f "$SHARED_CONTEXT_FILE" ]]; then
     printf -- '- Worktree: %s\n' "$STATUS"
     printf -- '- Task: %s\n' "$TASK"
     printf -- '- Constraints: %s\n' "${CONSTRAINTS:-none}"
-    printf -- '- Agent A: %s (%s) model=%s\n' "$AGENT_A" "$AGENT_A_NAME" "${AGENT_A_MODEL:-default}"
-    printf -- '- Agent B: %s (%s) model=%s\n' "$AGENT_B" "$AGENT_B_NAME" "${AGENT_B_MODEL:-default}"
+    printf -- '- Agents (%d):\n' "$NUM_AGENTS"
+    for i in "${!AGENTS[@]}"; do
+      printf -- '  - %s (%s) model=%s\n' "${AGENTS[$i]}" "${AGENT_NAMES[$i]}" "${AGENT_MODELS[$i]:-default}"
+    done
     printf -- '- Synthesizer: %s (%s) model=%s\n' "$SYNTHESIZER" "$SYNTH_NAME" "${SYNTH_MODEL:-default}"
     printf -- '- Timeout per round (s): %s\n\n' "$TIMEOUT_SECONDS"
     printf '## Protocol\n\nsymmetric-ctx|same-evidence|same-shape|mutual-critique|synthesis=agree+disagree+risks\n\n'
@@ -336,83 +376,109 @@ if [[ ! -f "$ROUND1_PROMPT_FILE" ]]; then
   } > "$ROUND1_PROMPT_FILE"
 fi
 
-# Round 1: independent proposals
-if [[ ! -f "$A_ROUND1_FILE" ]]; then
-  echo "Running $AGENT_A_NAME round 1..."
-  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT_A" "$ROUND1_PROMPT_FILE" "$A_ROUND1_FILE" "$WORK_ROOT" "$AGENT_A_MODEL"
-  write_frontmatter "$A_ROUND1_FILE" "$AGENT_A" "$AGENT_A_NAME" "$AGENT_A_MODEL" "round-1"
-else
-  echo "Skipping $AGENT_A_NAME round 1 (already complete)."
-fi
+# Round 1: independent proposals for all agents
+for i in "${!AGENTS[@]}"; do
+  agent="${AGENTS[$i]}"
+  name="${AGENT_NAMES[$i]}"
+  model="${AGENT_MODELS[$i]}"
+  outfile="${ROUND1_FILES[$i]}"
+  logfile="${AGENT_LOGS[$i]}"
 
-if [[ ! -f "$B_ROUND1_FILE" ]]; then
-  echo "Running $AGENT_B_NAME round 1..."
-  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT_B" "$ROUND1_PROMPT_FILE" "$B_ROUND1_FILE" "$WORK_ROOT" "$AGENT_B_MODEL"
-  write_frontmatter "$B_ROUND1_FILE" "$AGENT_B" "$AGENT_B_NAME" "$AGENT_B_MODEL" "round-1"
-else
-  echo "Skipping $AGENT_B_NAME round 1 (already complete)."
-fi
+  if [[ ! -f "$outfile" ]]; then
+    echo "Running $name round 1..."
+    run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$agent" "$ROUND1_PROMPT_FILE" "$outfile" "$WORK_ROOT" "$model" > "$logfile" 2>&1 || true
+    write_frontmatter "$outfile" "$agent" "$name" "$model" "round-1"
+  else
+    echo "Skipping $name round 1 (already complete)."
+  fi
+done
 
-if [[ ! -f "$A_CRITIQUE_PROMPT" ]]; then
-  {
-    printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
-      "$AGENT_A" "$AGENT_B" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "$A_ROUND1_FILE")" "$(cat "$B_ROUND1_FILE")"
-  } > "$A_CRITIQUE_PROMPT"
-fi
+# Round 2: cross-critiques only for exactly 2 agents (classic protocol)
+# For N>2, we skip pairwise critiques and go straight to synthesis with all proposals.
+# The value of N independent perspectives outweighs pairwise critique scaling issues.
+if [[ "$NUM_AGENTS" -eq 2 ]]; then
+  if [[ ! -f "${CRITIQUE_PROMPTS[0]}" ]]; then
+    {
+      printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
+        "${AGENTS[0]}" "${AGENTS[1]}" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[0]}")" "$(cat "${ROUND1_FILES[1]}")"
+    } > "${CRITIQUE_PROMPTS[0]}"
+  fi
 
-if [[ ! -f "$B_CRITIQUE_PROMPT" ]]; then
-  {
-    printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
-      "$AGENT_B" "$AGENT_A" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "$B_ROUND1_FILE")" "$(cat "$A_ROUND1_FILE")"
-  } > "$B_CRITIQUE_PROMPT"
-fi
+  if [[ ! -f "${CRITIQUE_PROMPTS[1]}" ]]; then
+    {
+      printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
+        "${AGENTS[1]}" "${AGENTS[0]}" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[1]}")" "$(cat "${ROUND1_FILES[0]}")"
+    } > "${CRITIQUE_PROMPTS[1]}"
+  fi
 
-# Round 2: cross-critiques
-if [[ ! -f "$A_CRITIQUE_FILE" ]]; then
-  echo "Running $AGENT_A_NAME critique round..."
-  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT_A" "$A_CRITIQUE_PROMPT" "$A_CRITIQUE_FILE" "$WORK_ROOT" "$AGENT_A_MODEL"
-  write_frontmatter "$A_CRITIQUE_FILE" "$AGENT_A" "$AGENT_A_NAME" "$AGENT_A_MODEL" "critique"
-else
-  echo "Skipping $AGENT_A_NAME critique round (already complete)."
-fi
+  for i in 0 1; do
+    agent="${AGENTS[$i]}"
+    name="${AGENT_NAMES[$i]}"
+    model="${AGENT_MODELS[$i]}"
+    prompt="${CRITIQUE_PROMPTS[$i]}"
+    outfile="${CRITIQUE_FILES[$i]}"
+    logfile="${AGENT_LOGS[$i]}"
 
-if [[ ! -f "$B_CRITIQUE_FILE" ]]; then
-  echo "Running $AGENT_B_NAME critique round..."
-  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT_B" "$B_CRITIQUE_PROMPT" "$B_CRITIQUE_FILE" "$WORK_ROOT" "$AGENT_B_MODEL"
-  write_frontmatter "$B_CRITIQUE_FILE" "$AGENT_B" "$AGENT_B_NAME" "$AGENT_B_MODEL" "critique"
-else
-  echo "Skipping $AGENT_B_NAME critique round (already complete)."
-fi
-
-if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
-  {
-    printf 'R3:synthesize\nRULES no-tools|evidence-backed\n\nCTX\n%s\n\nR1-%s\n%s\n\nR1-%s\n%s\n\nCRIT-%s\n%s\n\nCRIT-%s\n%s\n\nOUT final-approach|adopted-%s|adopted-%s|open-disagreements|verify-checklist|rollback|confidence+unknowns\nHUMAN-TL-DR prepend "## TL;DR" (3-5 plain sentences) before structured output\n' \
-      "$(cat "$SHARED_CONTEXT_FILE")" "$AGENT_A" "$(cat "$A_ROUND1_FILE")" "$AGENT_B" "$(cat "$B_ROUND1_FILE")" \
-      "$AGENT_A" "$(cat "$A_CRITIQUE_FILE")" "$AGENT_B" "$(cat "$B_CRITIQUE_FILE")" "$AGENT_A" "$AGENT_B"
-  } > "$SYNTHESIS_PROMPT"
+    if [[ ! -f "$outfile" ]]; then
+      echo "Running $name critique round..."
+      run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$agent" "$prompt" "$outfile" "$WORK_ROOT" "$model" >> "$logfile" 2>&1 || true
+      write_frontmatter "$outfile" "$agent" "$name" "$model" "critique"
+    else
+      echo "Skipping $name critique round (already complete)."
+    fi
+  done
 fi
 
 # Round 3: synthesis
+if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
+  {
+    printf 'R3:synthesize\nRULES no-tools|evidence-backed\n\nCTX\n%s\n\n' "$(cat "$SHARED_CONTEXT_FILE")"
+
+    for i in "${!AGENTS[@]}"; do
+      printf 'R1-%s\n%s\n\n' "${AGENTS[$i]}" "$(cat "${ROUND1_FILES[$i]}")"
+    done
+
+    if [[ "$NUM_AGENTS" -eq 2 ]]; then
+      for i in 0 1; do
+        printf 'CRIT-%s\n%s\n\n' "${AGENTS[$i]}" "$(cat "${CRITIQUE_FILES[$i]}")"
+      done
+      printf 'OUT final-approach|adopted-%s|adopted-%s|open-disagreements|verify-checklist|rollback|confidence+unknowns\n' "${AGENTS[0]}" "${AGENTS[1]}"
+    else
+      printf 'OUT final-approach|adopted-recommendations|open-disagreements|verify-checklist|rollback|confidence+unknowns\n'
+    fi
+
+    printf 'HUMAN-TL-DR prepend "## TL;DR" (3-5 plain sentences) before structured output\n'
+  } > "$SYNTHESIS_PROMPT"
+fi
+
 if [[ ! -f "$SYNTHESIS_FILE" ]]; then
   echo "Running $SYNTH_NAME synthesis round..."
-  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$SYNTHESIZER" "$SYNTHESIS_PROMPT" "$SYNTHESIS_FILE" "$WORK_ROOT" "$SYNTH_MODEL"
+  run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$SYNTHESIZER" "$SYNTHESIS_PROMPT" "$SYNTHESIS_FILE" "$WORK_ROOT" "$SYNTH_MODEL" > "$SYNTH_LOG" 2>&1 || true
   write_frontmatter "$SYNTHESIS_FILE" "$SYNTHESIZER" "$SYNTH_NAME" "$SYNTH_MODEL" "synthesis"
 else
   echo "Skipping synthesis round (already complete)."
 fi
 
+# Build INDEX.md
 cat > "$INDEX_FILE" <<EOF_INDEX
 # IA Bridge Session Index
 
 - Shared context: 00-shared-context.md
 - Shared round-1 prompt: 01-round1-shared-prompt.txt
-- ${AGENT_A_NAME} round 1: 10-agent-a-round1.md
-- ${AGENT_B_NAME} round 1: 20-agent-b-round1.md
-- ${AGENT_A_NAME} critiques ${AGENT_B_NAME}: 30-agent-a-critique.md
-- ${AGENT_B_NAME} critiques ${AGENT_A_NAME}: 40-agent-b-critique.md
-- Final synthesis: 50-final-synthesis.md
-- Agent logs (if any): agent-a.log, agent-b.log, synth.log
 EOF_INDEX
+
+for i in "${!AGENTS[@]}"; do
+  printf '- %s round 1: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${ROUND1_FILES[$i]}")" >> "$INDEX_FILE"
+done
+
+if [[ "$NUM_AGENTS" -eq 2 ]]; then
+  for i in 0 1; do
+    printf '- %s critiques %s: %s\n' "${AGENT_NAMES[$i]}" "${AGENT_NAMES[$((1-i))]}" "$(basename "${CRITIQUE_FILES[$i]}")" >> "$INDEX_FILE"
+  done
+fi
+
+printf '- Final synthesis: %s\n' "$(basename "$SYNTHESIS_FILE")" >> "$INDEX_FILE"
+printf '- Agent logs (if any): %s\n' "$(for f in "${AGENT_LOGS[@]}"; do basename "$f"; done | tr '\n' ' ')" >> "$INDEX_FILE"
 
 echo "IA bridge session completed: $SESSION_DIR"
 echo "Open: $SYNTHESIS_FILE"
