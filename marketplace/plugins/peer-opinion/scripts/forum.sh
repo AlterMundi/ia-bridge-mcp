@@ -393,41 +393,44 @@ for i in "${!AGENTS[@]}"; do
   fi
 done
 
-# Round 2: cross-critiques only for exactly 2 agents (classic protocol)
-# For N>2, we skip pairwise critiques and go straight to synthesis with all proposals.
-# The value of N independent perspectives outweighs pairwise critique scaling issues.
-if [[ "$NUM_AGENTS" -eq 2 ]]; then
-  if [[ ! -f "${CRITIQUE_PROMPTS[0]}" ]]; then
-    {
-      printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
-        "${AGENTS[0]}" "${AGENTS[1]}" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[0]}")" "$(cat "${ROUND1_FILES[1]}")"
-    } > "${CRITIQUE_PROMPTS[0]}"
-  fi
+# Round 2: critique round
+# For N==2: classic pairwise mutual critique (A critiques B, B critiques A).
+# For N>2: each agent critiques ALL other proposals in a single consolidated pass.
+# This scales linearly (N rounds) instead of quadratically (N*(N-1) pairwise rounds).
+for i in "${!AGENTS[@]}"; do
+  agent="${AGENTS[$i]}"
+  name="${AGENT_NAMES[$i]}"
+  model="${AGENT_MODELS[$i]}"
+  prompt="${CRITIQUE_PROMPTS[$i]}"
+  outfile="${CRITIQUE_FILES[$i]}"
+  logfile="${AGENT_LOGS[$i]}"
 
-  if [[ ! -f "${CRITIQUE_PROMPTS[1]}" ]]; then
-    {
-      printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\nPEER\n%s\n\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
-        "${AGENTS[1]}" "${AGENTS[0]}" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[1]}")" "$(cat "${ROUND1_FILES[0]}")"
-    } > "${CRITIQUE_PROMPTS[1]}"
-  fi
+  if [[ ! -f "$outfile" ]]; then
+    if [[ ! -f "$prompt" ]]; then
+      # Build list of peer proposals
+      local_peers=""
+      for j in "${!AGENTS[@]}"; do
+        if [[ "$j" -ne "$i" ]]; then
+          local_peers="${local_peers}PEER-${AGENTS[$j]}\n$(cat "${ROUND1_FILES[$j]}")\n\n"
+        fi
+      done
 
-  for i in 0 1; do
-    agent="${AGENTS[$i]}"
-    name="${AGENT_NAMES[$i]}"
-    model="${AGENT_MODELS[$i]}"
-    prompt="${CRITIQUE_PROMPTS[$i]}"
-    outfile="${CRITIQUE_FILES[$i]}"
-    logfile="${AGENT_LOGS[$i]}"
-
-    if [[ ! -f "$outfile" ]]; then
-      echo "Running $name critique round..."
-      run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$agent" "$prompt" "$outfile" "$WORK_ROOT" "$model" >> "$logfile" 2>&1 || true
-      write_frontmatter "$outfile" "$agent" "$name" "$model" "critique"
-    else
-      echo "Skipping $name critique round (already complete)."
+      if [[ "$NUM_AGENTS" -eq 2 ]]; then
+        printf 'R2:critique-peer SELF=%s PEER=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\n%s\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec\n' \
+          "$agent" "${AGENTS[$((1-i))]}" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[$i]}")" "$local_peers" > "$prompt"
+      else
+        printf 'R2:critique-all SELF=%s\nRULES no-tools|ctx+proposals-only|flag-unsupported\n\nCTX\n%s\n\nSELF\n%s\n\n%s\nOUT agree|disagree|peer-gaps(tests/risks)|adopt-from-peer|revised-rec|rank-peers\n' \
+          "$agent" "$(cat "$SHARED_CONTEXT_FILE")" "$(cat "${ROUND1_FILES[$i]}")" "$local_peers" > "$prompt"
+      fi
     fi
-  done
-fi
+
+    echo "Running $name critique round..."
+    run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$agent" "$prompt" "$outfile" "$WORK_ROOT" "$model" >> "$logfile" 2>&1 || true
+    write_frontmatter "$outfile" "$agent" "$name" "$model" "critique"
+  else
+    echo "Skipping $name critique round (already complete)."
+  fi
+done
 
 # Round 3: synthesis
 if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
@@ -438,10 +441,11 @@ if [[ ! -f "$SYNTHESIS_PROMPT" ]]; then
       printf 'R1-%s\n%s\n\n' "${AGENTS[$i]}" "$(cat "${ROUND1_FILES[$i]}")"
     done
 
+    for i in "${!AGENTS[@]}"; do
+      printf 'CRIT-%s\n%s\n\n' "${AGENTS[$i]}" "$(cat "${CRITIQUE_FILES[$i]}")"
+    done
+
     if [[ "$NUM_AGENTS" -eq 2 ]]; then
-      for i in 0 1; do
-        printf 'CRIT-%s\n%s\n\n' "${AGENTS[$i]}" "$(cat "${CRITIQUE_FILES[$i]}")"
-      done
       printf 'OUT final-approach|adopted-%s|adopted-%s|open-disagreements|verify-checklist|rollback|confidence+unknowns\n' "${AGENTS[0]}" "${AGENTS[1]}"
     else
       printf 'OUT final-approach|adopted-recommendations|open-disagreements|verify-checklist|rollback|confidence+unknowns\n'
@@ -471,11 +475,9 @@ for i in "${!AGENTS[@]}"; do
   printf '- %s round 1: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${ROUND1_FILES[$i]}")" >> "$INDEX_FILE"
 done
 
-if [[ "$NUM_AGENTS" -eq 2 ]]; then
-  for i in 0 1; do
-    printf '- %s critiques %s: %s\n' "${AGENT_NAMES[$i]}" "${AGENT_NAMES[$((1-i))]}" "$(basename "${CRITIQUE_FILES[$i]}")" >> "$INDEX_FILE"
-  done
-fi
+for i in "${!AGENTS[@]}"; do
+  printf '- %s critique: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${CRITIQUE_FILES[$i]}")" >> "$INDEX_FILE"
+done
 
 printf '- Final synthesis: %s\n' "$(basename "$SYNTHESIS_FILE")" >> "$INDEX_FILE"
 printf '- Agent logs (if any): %s\n' "$(for f in "${AGENT_LOGS[@]}"; do basename "$f"; done | tr '\n' ' ')" >> "$INDEX_FILE"
