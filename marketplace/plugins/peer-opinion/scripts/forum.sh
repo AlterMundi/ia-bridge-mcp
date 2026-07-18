@@ -472,15 +472,15 @@ cat > "$INDEX_FILE" <<EOF_INDEX
 EOF_INDEX
 
 for i in "${!AGENTS[@]}"; do
-  printf '- %s round 1: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${ROUND1_FILES[$i]}")" >> "$INDEX_FILE"
+  printf -- '- %s round 1: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${ROUND1_FILES[$i]}")" >> "$INDEX_FILE"
 done
 
 for i in "${!AGENTS[@]}"; do
-  printf '- %s critique: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${CRITIQUE_FILES[$i]}")" >> "$INDEX_FILE"
+  printf -- '- %s critique: %s\n' "${AGENT_NAMES[$i]}" "$(basename "${CRITIQUE_FILES[$i]}")" >> "$INDEX_FILE"
 done
 
-printf '- Final synthesis: %s\n' "$(basename "$SYNTHESIS_FILE")" >> "$INDEX_FILE"
-printf '- Agent logs (if any): %s\n' "$(for f in "${AGENT_LOGS[@]}"; do basename "$f"; done | tr '\n' ' ')" >> "$INDEX_FILE"
+printf -- '- Final synthesis: %s\n' "$(basename "$SYNTHESIS_FILE")" >> "$INDEX_FILE"
+printf -- '- Agent logs (if any): %s\n' "$(for f in "${AGENT_LOGS[@]}"; do basename "$f"; done | tr '\n' ' ')" >> "$INDEX_FILE"
 
 echo "IA bridge session completed: $SESSION_DIR"
 echo "Open: $SYNTHESIS_FILE"
