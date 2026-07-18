@@ -194,7 +194,7 @@ JSON
       "enabled": $enabled,
       "name": "Codex",
       "command": "codex",
-      "args": ["exec", "-m", "{{model}}", "-C", "{{cwd}}", "--skip-git-repo-check", "--output-last-message", "{{output_file}}", "-"],
+      "args": ["exec", "-m", "{{model}}", "-C", "{{cwd}}", "--skip-git-repo-check", "-s", "workspace-write", "--output-last-message", "{{output_file}}", "-"],
       "prompt_transport": "stdin",
       "output_mode": "file",
       "default_model": "o3",
@@ -294,7 +294,7 @@ ${joined_agents}
     "registered_clients": [${joined_clients}]
   },
   "runtime": {
-    "timeout_seconds": 300
+    "timeout_seconds": 1800
   }
 }
 EOF_CONFIG
