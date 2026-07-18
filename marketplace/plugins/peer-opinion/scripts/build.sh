@@ -20,9 +20,9 @@ Options:
   --with-review             Optional. After build, run a second-opinion review.
   --log-dir <path>          Optional. Output root (default: ~/.bridge-ai/builds).
   --max-diff-lines <n>      Optional. Max diff lines (default: 300).
-  --timeout-seconds <n>     Optional. Per-call timeout (default: 600).
-  --effort <level>          Optional. Override effort level (no default).
-  --max-turns <n>           Optional. Override max turns (default: 80).
+  --timeout-seconds <n>     Optional. Per-call timeout (default: runtime.timeout_seconds from config, fallback 3600).
+  --effort <level>          Optional. Override effort level (claude/grok: --effort; codex: model_reasoning_effort). Default: config.
+  --max-turns <n>           Optional. Override max turns (claude/grok only). Default: config.
   -h, --help                Show this help.
 USAGE
 }
@@ -65,9 +65,12 @@ MODEL=""
 WITH_REVIEW="false"
 LOG_DIR="${HOME}/.bridge-ai/builds"
 MAX_DIFF_LINES=300
-TIMEOUT_SECONDS=600
+TIMEOUT_SECONDS="$(jq -r '.runtime.timeout_seconds // 3600' <<<"$(bridge_load_config)" 2>/dev/null || echo 3600)"
+if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -le 0 ]]; then
+  TIMEOUT_SECONDS=3600
+fi
 EFFORT=""
-MAX_TURNS="80"
+MAX_TURNS=""
 
 MODEL_OVERRIDES=()
 
@@ -155,7 +158,7 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -le 0 ]]; the
   exit 1
 fi
 
-if ! [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || [[ "$MAX_TURNS" -le 0 ]]; then
+if [[ -n "$MAX_TURNS" ]] && { ! [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || [[ "$MAX_TURNS" -le 0 ]]; }; then
   echo "Error: --max-turns must be a positive integer." >&2
   exit 1
 fi
@@ -200,7 +203,7 @@ fi
 cd "$WORK_ROOT"
 
 if [[ "$MODE" == "code" ]]; then
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'no-head')"
   COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'no-head')"
   STATUS="clean"
   if [[ -n "$(git status --porcelain)" ]]; then
@@ -262,7 +265,7 @@ trap 'rm -f "$PROMPT_FILE"' EXIT
 
 echo "Building with $AGENT_NAME (agent: $AGENT, model: ${RESOLVED_MODEL:-default}, effort: $EFFORT, max-turns: $MAX_TURNS)..."
 
-run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT" "$PROMPT_FILE" "$OUTPUT_FILE" "$WORK_ROOT" "$RESOLVED_MODEL"
+run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT" "$PROMPT_FILE" "$OUTPUT_FILE" "$WORK_ROOT" "$RESOLVED_MODEL" "$EFFORT" "$MAX_TURNS"
 
 # Prepend frontmatter
 FRONTMATTER_FILE="${LOG_DIR}/.tmp-fm-$$-${RANDOM}.md"

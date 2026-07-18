@@ -15,6 +15,8 @@ bridge_run_agent() {
   local output_file="$3"
   local cwd="${4:-$(pwd)}"
   local model_override="${5:-}"
+  local effort="${6:-}"
+  local max_turns="${7:-}"
 
   if [[ -z "$agent_id" ]]; then
     echo "Error: bridge_run_agent requires agent_id." >&2
@@ -84,6 +86,45 @@ bridge_run_agent() {
     ) |
     .[] + "\u0000"
   ' <<<"$config")
+
+  # Inject effort / max-turns overrides into the agent's args.
+  # These come from build.sh --effort / --max-turns; empty means "keep config defaults".
+  if [[ -n "$effort" || -n "$max_turns" ]]; then
+    local -a fixed=()
+    local i=0
+    local seen_mt=0 seen_eff=0 seen_ce=0
+    case "$agent_id" in
+      claude|grok)
+        while [[ $i -lt ${#args[@]} ]]; do
+          local a="${args[$i]}"
+          if [[ "$a" == "--max-turns" && -n "$max_turns" ]]; then
+            fixed+=("$a" "$max_turns"); i=$((i+2)); seen_mt=1; continue
+          fi
+          if [[ "$a" == "--effort" && -n "$effort" ]]; then
+            fixed+=("$a" "$effort"); i=$((i+2)); seen_eff=1; continue
+          fi
+          fixed+=("$a"); i=$((i+1))
+        done
+        [[ -n "$max_turns" && $seen_mt -eq 0 ]] && fixed+=("--max-turns" "$max_turns")
+        [[ -n "$effort" && $seen_eff -eq 0 ]] && fixed+=("--effort" "$effort")
+        args=("${fixed[@]}")
+        ;;
+      codex)
+        while [[ $i -lt ${#args[@]} ]]; do
+          local a="${args[$i]}"
+          if [[ "$a" == "-c" && $((i+1)) -lt ${#args[@]} && "${args[$((i+1))]}" == model_reasoning_effort=* && -n "$effort" ]]; then
+            fixed+=("-c" "model_reasoning_effort=${effort}"); i=$((i+2)); seen_ce=1; continue
+          fi
+          fixed+=("$a"); i=$((i+1))
+        done
+        [[ -n "$effort" && $seen_ce -eq 0 ]] && fixed+=("-c" "model_reasoning_effort=${effort}")
+        args=("${fixed[@]}")
+        ;;
+      *)
+        # kimi / hermes / gemini: no known effort/max-turns flags; leave args untouched.
+        ;;
+    esac
+  fi
 
   local -a cmd_prefix=()
   if [[ -n "$capabilities_env_unset" ]]; then
