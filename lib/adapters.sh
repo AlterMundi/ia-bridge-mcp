@@ -120,8 +120,34 @@ bridge_run_agent() {
         [[ -n "$effort" && $seen_ce -eq 0 ]] && fixed+=("-c" "model_reasoning_effort=${effort}")
         args=("${fixed[@]}")
         ;;
+      agy)
+        # Antigravity CLI: effort is encoded in the model name suffix
+        # (e.g. gemini-3.6-flash-low); passing --effort with such a model
+        # errors out. Rewrite the suffix instead. For models without a
+        # suffix, append --effort as a flag.
+        local rewrote=0
+        while [[ $i -lt ${#args[@]} ]]; do
+          local a="${args[$i]}"
+          if [[ "$a" == "--model" && $((i+1)) -lt ${#args[@]} ]]; then
+            local m="${args[$((i+1))]}"
+            if [[ -n "$effort" && "$m" =~ ^(.*)-(low|medium|high)$ ]]; then
+              m="${BASH_REMATCH[1]}-${effort}"
+              rewrote=1
+            fi
+            fixed+=("$a" "$m"); i=$((i+2)); continue
+          fi
+          if [[ "$a" == "--effort" && -n "$effort" ]]; then
+            i=$((i+2)); continue  # drop bare --effort flags; suffix rules
+          fi
+          fixed+=("$a"); i=$((i+1))
+        done
+        if [[ -n "$effort" && $rewrote -eq 0 ]]; then
+          fixed+=("--effort" "$effort")
+        fi
+        args=("${fixed[@]}")
+        ;;
       *)
-        # kimi / hermes / gemini: no known effort/max-turns flags; leave args untouched.
+        # kimi / hermes: no known effort/max-turns flags; leave args untouched.
         ;;
     esac
   fi
