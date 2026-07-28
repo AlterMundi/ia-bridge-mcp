@@ -1,10 +1,10 @@
 ---
-description: Run the full Claude<->Codex bridge protocol through forum MCP
+description: Run the full multi-agent bridge protocol through forum MCP
 argument-hint: "<task statement>"
 allowed-tools: ["mcp__ia-bridge-mcp__ia_bridge_run", "mcp__ia-bridge-mcp__ia_bridge_job_status", "mcp__ia-bridge-mcp__ia_bridge_job_result", "mcp__ia-bridge-mcp__ia_bridge_read_file"]
 ---
 
-Use when the user asks for bridge/collaboration/comparison across Claude and Codex.
+Use when the user asks for bridge/collaboration/comparison across multiple AI agents.
 
 1. Call `ia_bridge_run` with `task=$ARGUMENTS` (async contract).
 2. Capture `job_id` from response.

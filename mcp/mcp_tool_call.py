@@ -21,7 +21,14 @@ def parse_tool_args(tokens: List[str]) -> Dict[str, object]:
             i += 1
             continue
         value = tokens[i + 1]
-        args[key] = int(value) if value.isdigit() else value
+        parsed_value = int(value) if value.isdigit() else value
+        if key in args:
+            if isinstance(args[key], list):
+                args[key].append(parsed_value)  # type: ignore[attr-defined]
+            else:
+                args[key] = [args[key], parsed_value]
+        else:
+            args[key] = parsed_value
         i += 2
     return args
 

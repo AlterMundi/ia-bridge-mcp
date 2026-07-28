@@ -2,23 +2,27 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_SCRIPT_DIR="$SCRIPT_DIR"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../../../../lib/adapters.sh"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  second-opinion.sh --task "<task description>" [options]
+  build.sh --task "<task description>" [options]
 
 Options:
   --task <text>             Required. Task statement.
-  --reviewer <agent-id>     Optional. Agent id from config (default: first enabled agent).
+  --agent <agent-id>        Optional. Agent id from config (default: 'grok' if enabled).
   --constraints <text>      Optional. Shared constraints.
   --model <name>            Optional. Override the agent's default model.
-  --model-override <id:model>  Optional. Repeatable. Override model for a specific agent.
-  --log-dir <path>          Optional. Output root (default: ~/.bridge-ai/opinions).
+  --model-override <id:model> Optional. Repeatable. Override model for a specific agent.
+  --with-review             Optional. After build, run a second-opinion review.
+  --log-dir <path>          Optional. Output root (default: ~/.bridge-ai/builds).
   --max-diff-lines <n>      Optional. Max diff lines (default: 300).
-  --timeout-seconds <n>     Optional. Per-call timeout (default: 240).
+  --timeout-seconds <n>     Optional. Per-call timeout (default: runtime.timeout_seconds from config, fallback 3600).
+  --effort <level>          Optional. Override effort level (claude/grok: --effort; codex: model_reasoning_effort). Default: config.
+  --max-turns <n>           Optional. Override max turns (claude/grok only). Default: config.
   -h, --help                Show this help.
 USAGE
 }
@@ -39,7 +43,6 @@ run_with_timeout() {
     "$@"
     return
   fi
-  # timeout(1) cannot run shell functions; detect and handle them directly
   if type -t "$1" 2>/dev/null | grep -qx 'function'; then
     local func="$1"
     shift
@@ -57,13 +60,18 @@ run_with_timeout() {
 
 TASK=""
 CONSTRAINTS=""
-REVIEWER=""
+AGENT=""
 MODEL=""
-LOG_DIR="${HOME}/.bridge-ai/opinions"
+WITH_REVIEW="false"
+LOG_DIR="${HOME}/.bridge-ai/builds"
 MAX_DIFF_LINES=300
-TIMEOUT_SECONDS=240
+TIMEOUT_SECONDS="$(jq -r '.runtime.timeout_seconds // 3600' <<<"$(bridge_load_config)" 2>/dev/null || echo 3600)"
+if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -le 0 ]]; then
+  TIMEOUT_SECONDS=3600
+fi
+EFFORT=""
+MAX_TURNS=""
 
-# Collect repeatable overrides
 MODEL_OVERRIDES=()
 
 while [[ $# -gt 0 ]]; do
@@ -73,9 +81,9 @@ while [[ $# -gt 0 ]]; do
       TASK="$2"
       shift 2
       ;;
-    --reviewer)
+    --agent)
       require_option_value "$1" "${2:-}"
-      REVIEWER="$2"
+      AGENT="$2"
       shift 2
       ;;
     --constraints)
@@ -93,6 +101,10 @@ while [[ $# -gt 0 ]]; do
       MODEL_OVERRIDES+=("$2")
       shift 2
       ;;
+    --with-review)
+      WITH_REVIEW="true"
+      shift
+      ;;
     --log-dir)
       require_option_value "$1" "${2:-}"
       LOG_DIR="$2"
@@ -106,6 +118,16 @@ while [[ $# -gt 0 ]]; do
     --timeout-seconds)
       require_option_value "$1" "${2:-}"
       TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --effort)
+      require_option_value "$1" "${2:-}"
+      EFFORT="$2"
+      shift 2
+      ;;
+    --max-turns)
+      require_option_value "$1" "${2:-}"
+      MAX_TURNS="$2"
       shift 2
       ;;
     -h|--help)
@@ -136,22 +158,32 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -le 0 ]]; the
   exit 1
 fi
 
-# Determine default reviewer if not provided
-AVAILABLE_AGENTS=$(bridge_agent_ids)
-if [[ -z "$REVIEWER" ]]; then
-  REVIEWER=$(head -n1 <<<"$AVAILABLE_AGENTS")
+if [[ -n "$MAX_TURNS" ]] && { ! [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || [[ "$MAX_TURNS" -le 0 ]]; }; then
+  echo "Error: --max-turns must be a positive integer." >&2
+  exit 1
 fi
 
-if ! grep -qx "$REVIEWER" <<<"$AVAILABLE_AGENTS"; then
-  echo "Error: reviewer '$REVIEWER' is not an enabled agent." >&2
+AVAILABLE_AGENTS=$(bridge_agent_ids)
+
+# Determine default agent
+if [[ -z "$AGENT" ]]; then
+  if grep -qx "grok" <<<"$AVAILABLE_AGENTS"; then
+    AGENT="grok"
+  else
+    AGENT=$(head -n1 <<<"$AVAILABLE_AGENTS")
+  fi
+fi
+
+if ! grep -qx "$AGENT" <<<"$AVAILABLE_AGENTS"; then
+  echo "Error: agent '$AGENT' is not an enabled agent." >&2
   echo "Enabled agents: $(tr '\n' ' ' <<<"$AVAILABLE_AGENTS")" >&2
   exit 1
 fi
 
-# Resolve model override for this reviewer
+# Resolve model override for this agent
 RESOLVED_MODEL="$MODEL"
 for override in "${MODEL_OVERRIDES[@]}"; do
-  if [[ "$override" == "$REVIEWER:"* ]]; then
+  if [[ "$override" == "$AGENT:"* ]]; then
     RESOLVED_MODEL="${override#*:}"
   fi
 done
@@ -171,7 +203,7 @@ fi
 cd "$WORK_ROOT"
 
 if [[ "$MODE" == "code" ]]; then
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'no-head')"
   COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'no-head')"
   STATUS="clean"
   if [[ -n "$(git status --porcelain)" ]]; then
@@ -199,34 +231,52 @@ fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REPO_SLUG="$(basename "$WORK_ROOT")"
-AGENT_NAME=$(bridge_agent_field "$REVIEWER" "name")
-OUTPUT_FILE="${LOG_DIR}/${STAMP}-${REPO_SLUG}-${REVIEWER}-second-opinion.md"
+AGENT_NAME=$(bridge_agent_field "$AGENT" "name")
+OUTPUT_FILE="${LOG_DIR}/${STAMP}-${REPO_SLUG}-${AGENT}-build.md"
 mkdir -p "$LOG_DIR"
 
-PROMPT_FILE="${LOG_DIR}/.tmp-second-opinion-$$-${RANDOM}.txt"
+PROMPT_FILE="${LOG_DIR}/.tmp-build-$$-${RANDOM}.txt"
 trap 'rm -f "$PROMPT_FILE"' EXIT
 
+# Build the implementation prompt
 {
-  printf 'CTX root=%s mode=%s branch=%s commit=%s tree=%s\n' \
-    "$WORK_ROOT" "$MODE" "$BRANCH" "$COMMIT" "$STATUS"
-  printf 'TASK %s\n' "$TASK"
-  printf 'CONSTRAINTS %s\n\n' "${CONSTRAINTS:-none}"
-  printf 'COMMITS\n%s\n\n' "$RECENT_COMMITS"
-  printf 'DIFF\n%s\n\n' "$DIFF_CONTENT"
-  printf 'R1:single-opinion\nRULES no-tools|ctx-only|no-invented|assume-explicit|concise\n'
-  printf 'OUT findings-by-severity|confidence+unknowns|rationale\n'
+  printf 'You are %s, an autonomous build agent.\n\n' "$AGENT_NAME"
+  printf '## BUILD TASK\n\n'
+  printf '%s\n\n' "$TASK"
+  if [[ -n "$CONSTRAINTS" ]]; then
+    printf '## CONSTRAINTS\n\n'
+    printf '%s\n\n' "$CONSTRAINTS"
+  fi
+  printf '## CONTEXT\n'
+  printf 'Working directory: %s\n' "$WORK_ROOT"
+  printf 'Branch: %s\n' "$BRANCH"
+  printf 'Commit: %s\n' "$COMMIT"
+  printf 'Tree: %s\n\n' "$STATUS"
+  printf '## RECENT COMMITS\n\n'
+  printf '%s\n\n' "$RECENT_COMMITS"
+  printf '## CURRENT DIFF\n\n'
+  printf '%s\n\n' "$DIFF_CONTENT"
+  printf '## INSTRUCTIONS\n'
+  printf '1. Implement the task autonomously using all available tools.\n'
+  printf '2. Write code changes, tests, and documentation as needed.\n'
+  printf '3. After implementation, provide a summary of what was done.\n'
+  printf '4. List changed files and key design decisions.\n'
 } > "$PROMPT_FILE"
 
-run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$REVIEWER" "$PROMPT_FILE" "$OUTPUT_FILE" "$WORK_ROOT" "$RESOLVED_MODEL"
+echo "Building with $AGENT_NAME (agent: $AGENT, model: ${RESOLVED_MODEL:-default}, effort: $EFFORT, max-turns: $MAX_TURNS)..."
+
+run_with_timeout "$TIMEOUT_SECONDS" bridge_run_agent "$AGENT" "$PROMPT_FILE" "$OUTPUT_FILE" "$WORK_ROOT" "$RESOLVED_MODEL" "$EFFORT" "$MAX_TURNS"
 
 # Prepend frontmatter
 FRONTMATTER_FILE="${LOG_DIR}/.tmp-fm-$$-${RANDOM}.md"
 trap 'rm -f "$FRONTMATTER_FILE" "$PROMPT_FILE"' EXIT
 {
   printf -- '---\n'
-  printf 'agent-id: %s\n' "$REVIEWER"
+  printf 'agent-id: %s\n' "$AGENT"
   printf 'agent-name: %s\n' "$AGENT_NAME"
   printf 'model: %s\n' "${RESOLVED_MODEL:-default}"
+  printf 'effort: %s\n' "$EFFORT"
+  printf 'max-turns: %s\n' "$MAX_TURNS"
   printf 'timestamp: %s\n' "$(date -Iseconds)"
   printf 'mode: %s\n' "$MODE"
   printf 'branch: %s\n' "$BRANCH"
@@ -237,4 +287,29 @@ trap 'rm -f "$FRONTMATTER_FILE" "$PROMPT_FILE"' EXIT
 
 mv "$FRONTMATTER_FILE" "$OUTPUT_FILE"
 
-echo "Second opinion saved to: $OUTPUT_FILE"
+echo "Build result saved to: $OUTPUT_FILE"
+
+# Optional review step: runs full forum protocol with claude + codex
+if [[ "$WITH_REVIEW" == "true" ]]; then
+  FORUM_SCRIPT="${BUILD_SCRIPT_DIR}/forum.sh"
+  if [[ -x "$FORUM_SCRIPT" ]]; then
+    echo ""
+    echo "=== Running forum review (claude + codex) ==="
+    REVIEW_TASK="Review the build implementation by $AGENT_NAME for task: $TASK. The build result is at: $OUTPUT_FILE. Review the changes and provide a GO/NO-GO synthesis with findings."
+    "$FORUM_SCRIPT" \
+      --task "$REVIEW_TASK" \
+      --agent-a claude \
+      --agent-b codex \
+      --synthesizer codex \
+      --log-dir "$LOG_DIR" \
+      --timeout-seconds 900
+    FORUM_RC=$?
+    if [[ $FORUM_RC -eq 0 ]]; then
+      echo "Forum review completed. Synthesis in: $LOG_DIR"
+    else
+      echo "Forum review failed with exit code $FORUM_RC" >&2
+    fi
+  else
+    echo "Warning: --with-review specified but forum.sh not found at $FORUM_SCRIPT" >&2
+  fi
+fi
